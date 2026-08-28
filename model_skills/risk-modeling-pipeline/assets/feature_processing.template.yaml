@@ -1,0 +1,54 @@
+node_id: feature-processing
+version: 1
+parameters:
+  # 当前节点只在确认后生成处理数据；所有统计均只用于证据展示。
+  fit_scope: train_only
+
+  # 特征筛选阈值。数值来自当前数据统计，用户可按业务要求调整。
+  selection:
+    # 特征缺失率超过此值则剔除。
+    max_missing_rate: 0.80
+    # IV 低于此值则剔除。
+    min_iv: 0.02
+    # 两个特征绝对相关性超过此值时保留 IV 更高者。
+    max_correlation: 0.80
+    # 单月 PSI 超过此值且超标月份比例达到下值时判定不稳定。
+    max_psi: 0.25
+    max_unstable_month_ratio: 0.30
+    # 低于该月样本量的月份不参与稳定性判断。
+    min_month_samples: 100
+    # 不稳定特征：review 保留并提示，drop 直接剔除。
+    stability_action: review
+    correlation_method: spearman
+    # 高集中度只做提示，不自动剔除。
+    max_dominant_rate_warning: 0.95
+
+  # 不同变量类型的预处理方法。全部规则只在确认后执行。
+  preprocessing:
+    numeric:
+      # true：无穷值转为空值；LightGBM 原生处理缺失值。
+      invalid_to_null: true
+      # 当前支持 native：保留缺失，由 LightGBM 处理。
+      missing_strategy: native
+    categorical:
+      # lightgbm_native：训练集频数编码；drop：删除所有类别变量。
+      strategy: lightgbm_native
+      # 低于最小频数或频率的类别归入 OTHER。
+      rare_min_count: 20
+      rare_min_rate: 0.001
+      # 未见类别：missing：转空值；other：归入 OTHER。
+      unknown_action: missing
+      # 唯一率达到此值的类别变量视为近似主键并删除。
+      near_unique_rate: 0.98
+      max_categories: 100
+      # 高基数类别：drop：删除；native：保留并编码。
+      high_cardinality_action: drop
+    text:
+      # 当前仅支持 drop，避免未经确认的文本语义建模。
+      action: drop
+      # 平均字符串长度达到此值且唯一率较高时识别为文本。
+      min_average_length: 64
+
+  output:
+    # 确认后输出处理后的 Parquet 和审计清单。
+    write_processed_data: true

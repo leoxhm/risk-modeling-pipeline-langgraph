@@ -1,0 +1,38 @@
+# 样本诊断节点配置。
+# 这是样本诊断节点唯一需要用户确认的配置文件。
+# 本节点只读取数据做诊断并记录处理策略，不会修改或保存处理后的数据。
+node_id: sample-diagnosis
+version: 1
+parameters:
+  # 安全门禁：必须先确认 data-read.yaml 才能读取样本。
+  require_data_read_confirmation: true
+
+  # 诊断阈值：只用于生成风险提示，不会自动改变数据。
+  diagnostics:
+    # 少数类占比低于此值时提示类别不平衡。
+    imbalance_warning_minority_rate: 0.10
+    # 少数类占比低于此值时升级为严重告警。
+    imbalance_critical_minority_rate: 0.01
+    # 最新月份样本量低于近期月中位数乘此比例时提示月份不完整。
+    latest_month_min_volume_ratio: 0.50
+    # 相邻月份坏样本率变化超过此值时提示时间波动。
+    monthly_bad_rate_change_warning: 0.03
+    # 单行缺失率达到此值时提示高缺失样本。
+    high_missing_row_rate: 0.80
+
+  # 样本处理策略：只记录用户选择，后续特征预处理/训练节点负责执行。
+  # 可选值请直接按注释填写；选择 error 表示发现问题时阻断后续节点。
+  treatment:
+    # 重复主键：error | keep_first | keep_last
+    duplicate_action: error
+    # 缺失目标标签：error | drop
+    missing_target_action: error
+    # 全空特征列：drop | error
+    all_null_feature_action: drop
+    # 单行高缺失样本：keep | drop
+    high_missing_row_action: keep
+    # 最新不完整月份：error | exclude | keep
+    incomplete_latest_month_action: error
+    # 类别不平衡：none | class_weight
+    # class_weight 只作为训练参数提示，不在本节点执行。
+    class_imbalance_action: class_weight

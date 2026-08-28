@@ -1,0 +1,74 @@
+split:
+  oot_months: 2
+  test_ratio: 0.2
+  random_seed: 42
+
+feature_preprocessing:
+  numeric:
+    invalid_to_null: true
+    missing_strategy: native
+  categorical:
+    strategy: lightgbm_native
+    rare_min_count: 20
+    rare_min_rate: 0.001
+    unknown_action: missing
+    near_unique_rate: 0.98
+    max_categories: 100
+    high_cardinality_action: drop
+  text:
+    action: drop
+    min_average_length: 64
+
+feature_selection:
+  min_iv: 0.02
+  max_correlation: 0.9
+  max_missing_rate: 0.8
+  max_dominant_rate_warning: 0.95
+  max_psi: 0.25
+  max_unstable_month_ratio: 0.30
+  min_month_samples: 100
+  stability_action: review
+  correlation_method: spearman
+
+training:
+  mode: tuning
+
+tuning:
+  sampler: tpe
+  objective_metric: ks
+  n_trials: 50
+  timeout_seconds: 900
+  startup_trials: 10
+  cv_folds: 3
+  random_seed: 42
+  min_bad_samples_per_fold: 20
+  auc_gap_penalty: 0.5
+  fold_std_penalty: 0.25
+  search_space:
+    learning_rate: [0.01, 0.08]
+    num_leaves: [7, 63]
+    max_depth: [3, 8]
+    min_data_in_leaf: [30, 300]
+    feature_fraction: [0.6, 1.0]
+    bagging_fraction: [0.6, 1.0]
+    bagging_freq: [1, 10]
+    lambda_l1: [0.0001, 20.0]
+    lambda_l2: [0.0001, 20.0]
+    min_gain_to_split: [0.0, 1.0]
+
+model:
+  objective: binary
+  metric: auc
+  early_stopping_metric: ks
+  learning_rate: 0.03
+  num_leaves: 31
+  max_depth: -1
+  min_data_in_leaf: 30
+  feature_fraction: 0.8
+  bagging_fraction: 0.8
+  bagging_freq: 1
+  lambda_l1: 0.0
+  lambda_l2: 1.0
+  min_gain_to_split: 0.0
+  num_boost_round: 1000
+  early_stopping_rounds: 100

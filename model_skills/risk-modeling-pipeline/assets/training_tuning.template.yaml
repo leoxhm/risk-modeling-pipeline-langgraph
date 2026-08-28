@@ -1,0 +1,6 @@
+node_id: training-tuning
+version: 1
+parameters:
+  mode: baseline
+  max_trials: 20
+  objective_metric: auc

@@ -1,0 +1,14 @@
+data:
+  # Optional. Keep null to let data-read discover a unique supported file in
+  # the workspace root; set a relative/absolute path when several files exist.
+  input_path: null
+
+schema:
+  id_cols:
+    - id_column
+  date_col: observation_date
+  target:
+    column: target_column
+    good_label: 0
+    bad_label: 1
+  exclude_cols: []

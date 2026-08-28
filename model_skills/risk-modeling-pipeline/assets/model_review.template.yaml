@@ -1,0 +1,5 @@
+node_id: model-review
+version: 1
+parameters:
+  auc_gap_warning: 0.05
+  psi_warning: 0.25

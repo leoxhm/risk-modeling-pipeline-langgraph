@@ -1,0 +1,12 @@
+# Runtime dependencies bundled with the installed Skill engine.
+polars>=1.0,<2.0
+fastexcel>=0.12,<1.0
+PyYAML>=6.0,<7.0
+numpy>=1.24,<3.0
+scipy>=1.10,<2.0
+pandas>=1.5,<3.0
+scikit-learn>=1.3,<2.0
+lightgbm>=4.0,<5.0
+optuna>=4.0,<6.0
+toad>=0.1.7,<0.2
+XlsxWriter>=3.2,<4.0

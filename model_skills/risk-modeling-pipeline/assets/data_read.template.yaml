@@ -1,0 +1,14 @@
+# Copy to configs/node_configs/data-read.yaml in the user workspace.
+# The CLI also creates this file automatically when it is missing.
+node_id: data-read
+version: 1
+parameters:
+  # Optional role overrides. null means use data_contract.yaml.
+  id_col_nm: null
+  dt_col_nm: null
+  label_col_nm: null
+  encoding: null
+  sheet_name: 0
+  infer_schema_length: 10000
+  allow_id_duplicates: false
+  allow_target_issues: true

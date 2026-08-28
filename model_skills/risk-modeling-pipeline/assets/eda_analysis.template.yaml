@@ -1,0 +1,22 @@
+# Copy to configs/node_configs/eda-analysis.yaml in the user workspace.
+# The EDA node first writes this file and waits for user confirmation.
+node_id: eda-analysis
+version: 1
+parameters:
+  # Derived from the confirmed data-read.yaml/data_contract.yaml.
+  month_col: event_month
+  # null uses the earliest available month as the PSI baseline.
+  psi_base_month: null
+  bin_count: 10
+  ks_method: quantile
+  ks_bucket: 10
+  binning_method: quantile
+  max_categories: 20
+  correlation_method: pearson
+  metrics_backend: toad
+  missing_rate_threshold: 0.8
+  constant_rate_threshold: 0.8
+  duplicate_strategy: keep_first
+  generate_plots: true
+  plot_top_n: 50
+  generate_report: true

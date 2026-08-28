@@ -1,0 +1,10 @@
+# Complete Linux/Conda installation for the modeling Skill and JupyterLab use.
+# For a lean production engine, install requirements.txt instead.
+-r requirements.txt
+
+# JupyterLab kernel integration
+ipykernel>=6.29,<7.0
+
+# Optional quality checks used by the project test suite
+pytest>=8.0,<9.0
+ruff>=0.11,<1.0

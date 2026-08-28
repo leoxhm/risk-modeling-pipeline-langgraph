@@ -1,0 +1,5 @@
+node_id: report-delivery
+version: 1
+parameters:
+  write_xlsx: true
+  write_model_files: true

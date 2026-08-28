@@ -1,0 +1,14 @@
+diagnostics:
+  imbalance_warning_minority_rate: 0.10
+  imbalance_critical_minority_rate: 0.01
+  latest_month_min_volume_ratio: 0.50
+  monthly_bad_rate_change_warning: 0.03
+  high_missing_row_rate: 0.80
+
+treatment:
+  duplicate_action: keep_first
+  missing_target_action: error
+  all_null_feature_action: drop
+  high_missing_row_action: keep
+  incomplete_latest_month_action: error
+  class_imbalance_action: class_weight

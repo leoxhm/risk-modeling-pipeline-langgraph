@@ -1,0 +1,2 @@
+"""Data-read workflow node."""
+

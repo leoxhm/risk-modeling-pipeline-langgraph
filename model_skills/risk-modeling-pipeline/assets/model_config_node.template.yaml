@@ -1,0 +1,4 @@
+node_id: model-config
+version: 1
+parameters:
+  config_path: configs/model_config.yaml

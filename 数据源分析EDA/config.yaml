@@ -1,0 +1,32 @@
+# ============================================================
+# 风控变量 EDA 分析配置文件
+# 使用方式：
+#   命令行: python main.py ，会自动读取 config.yaml
+#   Jupyter: 直接运行 run.ipynb ，会自动读取 config.yaml
+# ============================================================
+
+data:
+  # 输入数据路径
+  input_path: "./data/yl_to_data_zx.csv"
+  # 输入数据 Y 标列名
+  target_col: y_flag
+  # 输入数据日期列名
+  date_col: clean_date
+  # 输入数据不参与计算列名
+  exclude_cols:
+    - map_key
+    - clean_date
+    - y_flag
+
+output:
+  # 输出报告路径
+  excel_path: output/yl_to_data_zx.xlsx
+
+analysis:
+  ks_bucket: 10
+  ks_method: quantile
+  psi_base_month: null
+
+excel:
+  freeze_panes: true
+  autofilter: true

@@ -1,0 +1,12 @@
+data:
+  input_path: ../../../data.csv
+
+schema:
+  id_cols:
+    - map_key
+  date_col: clean_date
+  target:
+    column: y_flag
+    good_label: 0
+    bad_label: 1
+  exclude_cols: []
