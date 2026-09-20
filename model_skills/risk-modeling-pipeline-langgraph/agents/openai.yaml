@@ -1,0 +1,3 @@
+interface:
+  display_name: "LangGraph 风控建模"
+  short_description: "可暂停、可恢复的风控建模流程 Skill"

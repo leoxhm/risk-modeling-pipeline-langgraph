@@ -1,0 +1,12 @@
+# 建模样本切分配置；只影响 Train/Validate/OOT，不删除原始数据。
+strategy: time
+
+# 从完整历史月份中，按时间顺序预留 Validate。
+validate_ratio: 0.20
+
+# 最新若干完整月份作为 OOT，仅用于最终稳定性评估。
+oot_months: 2
+
+# 最新月份样本量低于历史月份中位数的该比例时，自动排除出建模数据。
+exclude_latest_incomplete: true
+incomplete_month_ratio: 0.30

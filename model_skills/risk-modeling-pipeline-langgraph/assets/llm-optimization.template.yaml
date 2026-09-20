@@ -1,0 +1,33 @@
+# LLM 调参配置；仅当 model-config 选择 llm 时使用。
+node_id: llm-optimization
+method: llm
+# OpenAI 兼容服务地址，例如阿里云 DashScope 的 compatible-mode 地址。
+model: qwen3.8-flash           # 例如 qwen3.5-flash；为空时读取 LLM_TUNING_MODEL
+base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1        # 例如 https://.../v1；为空时读取 LLM_TUNING_BASE_URL
+api_key: sk-sp-H.DLLMXI.K9wF.MEQCIDyJVbppWADkmPHGibifDVPlhY2k6yWnxA8MJU8zx15SAiA7oTAIxC_Q_AL5zJG9IT2SDZgXr8CRwzvqPqIFBTvVcA
+api_key_env: LLM_TUNING_API_KEY
+temperature: 0.0
+# 单轮 API 超时；建议 60–90 秒，避免整个 LangGraph 节点被长时间阻塞。
+timeout_seconds: 90
+# 对 timeout_seconds 的保护上限；可按内网服务实际响应时间调整。
+max_timeout_seconds: 90
+# 整个 LLM 调参节点的可选总时长上限；0 表示不限制。
+max_total_seconds: 900
+# Qwen3 兼容接口关闭思考链可显著降低每轮等待时间；不兼容的服务可改为 null。
+enable_thinking: false
+verify_ssl: true
+ca_bundle: null
+# 默认按综合质量分选择候选：OOT KS 权重最高，同时惩罚 Train/Validate/OOT KS 差距。
+# 如需严格只用 Validate 搜索，可改为 validate_ks，并把 OOT 作为独立最终检验。
+metric: quality_score
+direction: maximize
+# 每一轮的请求都会带上当前参数、Train/Validate/OOT 指标和历史结果；
+# 大模型必须返回 JSON：{"parameters": {"learning_rate": 0.03}, "reason": "..."}
+max_rounds: 10
+# Validate KS 至少提升该值才接受候选；OOT KS 回退超过 max_oot_ks_regression 会拒绝。
+min_improvement: 0.001
+max_oot_ks_regression: 0.02
+max_retries_per_round: 2
+# 默认最多再重试 1 次，防止单轮网络异常拖垮整个节点；需要时可显式提高。
+max_retries_cap: 1
+oot_final_check: true

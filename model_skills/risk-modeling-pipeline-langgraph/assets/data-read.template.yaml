@@ -1,0 +1,20 @@
+# LangGraph trial uses the same data-read parameters as the stable Skill.
+# 用户可在工作区 configs/node_configs/data-read.yaml 中修改这些参数。
+node_id: data-read
+parameters:
+  # 数据文件编码；CSV 常见值为 utf-8、utf-8-sig 或 gbk。
+  encoding: utf-8
+  # Excel 工作表名称或从 0 开始的序号；CSV/Parquet 忽略此项。
+  sheet_name: 0
+  # Polars 推断字段类型时读取的行数。
+  infer_schema_length: 10000
+  # 是否在 LangGraph checkpoint 中暂存本次数据，供后续节点复用，避免重复读取。
+  # 超大文件建议设为 false，后续节点会按清单重新读取。
+  cache_data: true
+  # 以下字段为空时沿用 configs/data_contract.yaml。
+  id_col_nm: null
+  dt_col_nm: null
+  label_col_nm: null
+  # 是否允许主键重复或标签异常。默认不允许。
+  allow_id_duplicates: false
+  allow_target_issues: false

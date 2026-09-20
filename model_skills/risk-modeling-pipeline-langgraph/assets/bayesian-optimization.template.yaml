@@ -1,0 +1,22 @@
+# 贝叶斯优化配置；仅当 model-config 选择 bayesian 时使用。
+node_id: bayesian-optimization
+method: bayesian
+sampler: tpe
+direction: maximize
+# 最终候选选择默认使用综合质量分：OOT KS 权重最高，并惩罚 Train/Validate/OOT KS 差距。
+# 如需严格只用 Validate 搜索、把 OOT 留作完全独立的最终检验，可改为 validate_ks。
+metric: quality_score
+max_trials: 50
+random_seed: 42
+# 可按项目规模收窄搜索空间；省略时使用引擎内置边界。
+bounds:
+  learning_rate: [0.005, 0.20]
+  num_leaves: [7, 128]
+  max_depth: [-1, 12]
+  min_child_samples: [10, 500]
+  subsample: [0.5, 1.0]
+  colsample_bytree: [0.5, 1.0]
+  reg_alpha: [0.0, 50.0]
+  reg_lambda: [0.0, 50.0]
+  min_split_gain: [0.0, 2.0]
+  n_estimators: [50, 1000]

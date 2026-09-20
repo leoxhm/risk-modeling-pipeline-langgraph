@@ -1,0 +1,23 @@
+# 基础模型配置；调参方式由 OpenCode 在 model-config 节点要求用户二选一。
+node_id: model-config
+
+model:
+  # 当前版本先支持 LightGBM 二分类。
+  name: lightgbm
+  objective: binary
+  eval_metric: auc
+  random_state: 42
+  # 可选：覆盖 LightGBM baseline 参数；未填写时使用 Skill 默认值。
+  parameters: {}
+
+split:
+  # 来自前面已确认的 sample-split 清单；OOT 不参与参数搜索。
+  strategy: time
+  optimize_on: validate
+  # 最终候选默认按综合质量分选择：OOT KS 权重更高，并惩罚 Train/Validate/OOT KS 差距。
+  optimize_metric: quality_score
+  final_check: oot
+
+tuning:
+  # 只能填写 bayesian 或 llm；用户确认后只执行对应节点。
+  method: null

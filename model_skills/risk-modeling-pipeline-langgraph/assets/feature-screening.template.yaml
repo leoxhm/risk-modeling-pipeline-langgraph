@@ -1,0 +1,25 @@
+# 特征筛选配置；指标在 Train 计算，Validate/OOT 仅用于稳定性检查。
+quality:
+  missing_rate_delete: 0.80
+  constant_delete: true
+
+univariate:
+  iv_min: 0.02
+  ks_min: 0.05
+  bin_count: 10
+
+stability:
+  psi_warning: 0.10
+  psi_delete: 0.25
+
+correlation:
+  abs_threshold: 0.70
+
+# 对话反馈表最多展示多少个重点字段；完整字段指标仍写入 feature_selection.csv。
+summary_top_n: 10
+
+preprocessing:
+  numeric:
+    missing: keep_native
+  categorical:
+    method: drop
