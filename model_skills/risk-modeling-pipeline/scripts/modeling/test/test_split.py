@@ -24,10 +24,16 @@ class ModelSplitIntegrationTest(unittest.TestCase):
         config = load_model_config(PROJECT_ROOT / "risk-modeling-pipeline" / "scripts" / "test_fixtures" / "model_config.yaml")
         result = split_dataset(cleaned.data, contract, config.split)
 
+        self.assertEqual(result.test_month_values, ("202509", "202510"))
         self.assertEqual(result.oot_month_values, ("202511", "202512"))
         self.assertEqual(result.train.height + result.test.height + result.oot.height, cleaned.data.height)
         self.assertEqual(result.oot.height, 520)
-        self.assertAlmostEqual(result.test.height / (result.train.height + result.test.height), 0.2, places=2)
+        self.assertEqual(
+            set(result.test.get_column("event_month").unique().to_list()),
+            {"202509", "202510"},
+        )
+        self.assertLess(result.train.get_column("event_month").max(), result.test.get_column("event_month").min())
+        self.assertLess(result.test.get_column("event_month").max(), result.oot.get_column("event_month").min())
         self.assertFalse(set(result.train.get_column("map_key")) & set(result.test.get_column("map_key")))
         self.assertFalse(set(result.train.get_column("map_key")) & set(result.oot.get_column("map_key")))
         self.assertFalse(set(result.test.get_column("map_key")) & set(result.oot.get_column("map_key")))

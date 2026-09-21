@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
+import re
 from typing import Any, Iterable
 
 import yaml
@@ -69,12 +71,23 @@ DEFAULT_NODE_CONFIGS: dict[str, dict[str, Any]] = {
                 "high_missing_row_rate": 0.80,
             },
             "treatment": {
-                "duplicate_action": "error",
-                "missing_target_action": "error",
+                "duplicate_action": "keep_first",
+                "missing_target_action": "drop",
                 "all_null_feature_action": "drop",
                 "high_missing_row_action": "keep",
-                "incomplete_latest_month_action": "error",
+                "incomplete_latest_month_action": "exclude",
                 "class_imbalance_action": "class_weight",
+            },
+            "llm": {
+                "enabled": False,
+                "model": None,
+                "base_url": None,
+                "api_key": None,
+                "api_key_env": "LLM_TUNING_API_KEY",
+                "temperature": 0.0,
+                "timeout_seconds": 60,
+                "verify_ssl": True,
+                "ca_bundle": None,
             },
         },
     },
@@ -86,7 +99,7 @@ DEFAULT_NODE_CONFIGS: dict[str, dict[str, Any]] = {
             "bin_count": 10,
             "ks_method": "quantile",
             "ks_bucket": 10,
-            "binning_method": "quantile",
+            "binning_method": "chi",
             "max_categories": 20,
             "correlation_method": "pearson",
             "metrics_backend": "toad",
@@ -127,9 +140,127 @@ DEFAULT_NODE_CONFIGS: dict[str, dict[str, Any]] = {
                 "text": {"action": "drop", "min_average_length": 64},
             },
             "output": {"write_processed_data": True},
+            "llm": {
+                "enabled": False,
+                "model": None,
+                "base_url": None,
+                "api_key": None,
+                "api_key_env": "LLM_TUNING_API_KEY",
+                "temperature": 0.0,
+                "timeout_seconds": 60,
+                "verify_ssl": True,
+                "ca_bundle": None,
+            },
         },
     },
-    "model-config": {"version": 1, "parameters": {"config_path": "configs/model_config.yaml"}},
+    "model-config": {
+        "version": 1,
+        "parameters": {
+            "sample_treatment": {
+                "duplicate_action": "keep_first",
+                "missing_target_action": "drop",
+                "all_null_feature_action": "drop",
+                "high_missing_row_action": "keep",
+                "incomplete_latest_month_action": "exclude",
+                "class_imbalance_action": "class_weight",
+            },
+            "split": {
+                "strategy": "time",
+                "oot_months": 2,
+                "test_months": 2,
+                "test_ratio": 0.2,
+                "random_seed": 42,
+            },
+            "feature_preprocessing": {
+                "numeric": {"invalid_to_null": True, "missing_strategy": "native"},
+                "categorical": {
+                    "strategy": "lightgbm_native",
+                    "rare_min_count": 20,
+                    "rare_min_rate": 0.001,
+                    "unknown_action": "missing",
+                    "near_unique_rate": 0.98,
+                    "max_categories": 100,
+                    "high_cardinality_action": "drop",
+                },
+                "text": {"action": "drop", "min_average_length": 64},
+            },
+            "feature_selection": {
+                "min_iv": 0.02,
+                "max_correlation": 0.80,
+                "max_missing_rate": 0.80,
+                "max_dominant_rate_warning": 0.95,
+                "max_psi": 0.25,
+                "max_unstable_month_ratio": 0.30,
+                "min_month_samples": 100,
+                "stability_action": "review",
+                "correlation_method": "spearman",
+            },
+            "training": {"mode": "tuning"},
+            "tuning": {
+                "method": "llm",
+                "sampler": "tpe",
+                "objective_metric": "ks",
+                "n_trials": 50,
+                "timeout_seconds": 900,
+                # 仅当 tuning.method=llm 时使用；不会与 Optuna 串联。
+                "llm": {
+                    "enabled": True,
+                    "max_rounds": 10,
+                    "run_all_rounds": True,
+                    "min_improvement": 0.005,
+                    "stopping": {
+                        "plateau_rounds": 2,
+                        "plateau_min_improvement": 0.003,
+                        "target_tolerance": 0.01,
+                        "targets": {
+                            "validate_ks": 0.30,
+                            "validate_auc": 0.75,
+                            "oot_ks": 0.25,
+                            "oot_auc": 0.70,
+                        },
+                        "guardrails": {
+                            "max_train_validate_ks_gap": 0.10,
+                            "max_validate_oot_ks_drop": 0.08,
+                            "max_oot_degradation_vs_baseline": 0.03,
+                            "min_oot_bad_count": 30,
+                        },
+                    },
+                    "timeout_seconds": 60,
+                    "api_key": None,
+                    "model": None,
+                    "base_url": None,
+                    "api_key_env": "LLM_TUNING_API_KEY",
+                    "verify_ssl": True,
+                    "ca_bundle": None,
+                },
+                "startup_trials": 10,
+                "cv_strategy": "rolling",
+                "cv_folds": 3,
+                "validation_months": 1,
+                "gap_months": 0,
+                "min_train_months": 3,
+                "random_seed": 42,
+                "min_bad_samples_per_fold": 20,
+                "auc_gap_penalty": 0.5,
+                "fold_std_penalty": 0.25,
+                "search_space": {
+                    "learning_rate": [0.01, 0.08], "num_leaves": [7, 63],
+                    "max_depth": [3, 8], "min_data_in_leaf": [30, 300],
+                    "feature_fraction": [0.6, 1.0], "bagging_fraction": [0.6, 1.0],
+                    "bagging_freq": [1, 10], "lambda_l1": [0.0001, 20.0],
+                    "lambda_l2": [0.0001, 20.0], "min_gain_to_split": [0.0, 1.0],
+                },
+            },
+            "model": {
+                "objective": "binary", "metric": "auc", "early_stopping_metric": "ks",
+                "learning_rate": 0.03, "num_leaves": 31, "max_depth": -1,
+                "min_data_in_leaf": 30, "feature_fraction": 0.8,
+                "bagging_fraction": 0.8, "bagging_freq": 1, "lambda_l1": 0.0,
+                "lambda_l2": 1.0, "min_gain_to_split": 0.0,
+                "num_boost_round": 1000, "early_stopping_rounds": 100,
+            },
+        },
+    },
     "training-tuning": {
         "version": 1,
         "parameters": {"mode": "baseline", "max_trials": 20, "objective_metric": "auc"},
@@ -198,11 +329,22 @@ def populate_data_read_roles(
     if not changed:
         return False
 
-    body = yaml.safe_load(config.path.read_text(encoding="utf-8")) or {}
-    body["parameters"] = parameters
-    config.path.write_text(
-        yaml.safe_dump(body, allow_unicode=True, sort_keys=False), encoding="utf-8"
-    )
+    # Update only the three role values in-place. Re-serializing the entire
+    # YAML document with PyYAML would discard the explanatory comments from
+    # data_read.template.yaml, which are part of the user-facing contract.
+    text = config.path.read_text(encoding="utf-8")
+    for key in ("id_col_nm", "dt_col_nm", "label_col_nm"):
+        value = parameters.get(key)
+        encoded = json.dumps(value, ensure_ascii=False)
+        pattern = re.compile(rf"^(?P<indent>\s+){re.escape(key)}\s*:\s*.*$", re.MULTILINE)
+        text, count = pattern.subn(
+            lambda match: f"{match.group('indent')}{key}: {encoded}",
+            text,
+            count=1,
+        )
+        if count == 0:
+            raise ValueError(f"Cannot update missing data-read parameter: {key}")
+    config.path.write_text(text, encoding="utf-8")
     logger.info("Populated data-read role suggestions in %s", config.path)
     return True
 
@@ -268,6 +410,81 @@ def _validate(node_id: str, parameters: dict[str, Any]) -> None:
             raise ValueError("feature-processing categorical.high_cardinality_action must be drop or native")
         if text.get("action") != "drop":
             raise ValueError("feature-processing text.action currently supports only drop")
+    if node_id == "model-config":
+        # Feature preprocessing and feature selection were already confirmed
+        # by the preceding feature-processing node. The model-config YAML
+        # therefore exposes only modeling decisions; the executor merges the
+        # upstream feature policy and engine defaults before training.
+        required = ("sample_treatment", "split", "training", "tuning", "model")
+        missing = [key for key in required if not isinstance(parameters.get(key), dict)]
+        if missing:
+            raise ValueError("model-config requires mappings: " + ", ".join(missing))
+        treatment = parameters["sample_treatment"]
+        allowed_actions = {
+            "duplicate_action": {"error", "keep_first", "keep_last"},
+            "missing_target_action": {"error", "drop"},
+            "all_null_feature_action": {"error", "drop"},
+            "high_missing_row_action": {"drop", "keep"},
+            "incomplete_latest_month_action": {"error", "keep", "exclude"},
+            "class_imbalance_action": {"none", "class_weight"},
+        }
+        for key, allowed in allowed_actions.items():
+            if treatment.get(key) not in allowed:
+                raise ValueError(f"model-config.sample_treatment.{key} is invalid")
+        if parameters["training"].get("mode") not in {"baseline", "tuning"}:
+            raise ValueError("model-config.training.mode must be baseline or tuning")
+        tuning = parameters["tuning"]
+        if tuning.get("cv_strategy", "rolling") not in {"rolling", "stratified"}:
+            raise ValueError("model-config.tuning.cv_strategy must be rolling or stratified")
+        for key in ("cv_folds", "validation_months", "min_train_months"):
+            if not isinstance(tuning.get(key, 1), int) or tuning.get(key, 1) < 1:
+                raise ValueError(f"model-config.tuning.{key} must be a positive integer")
+        if not isinstance(tuning.get("gap_months", 0), int) or tuning.get("gap_months", 0) < 0:
+            raise ValueError("model-config.tuning.gap_months must be a non-negative integer")
+        llm = parameters["tuning"].get("llm", {})
+        if not isinstance(llm, dict):
+            raise ValueError("model-config.tuning.llm must be a mapping")
+        if not isinstance(llm.get("enabled", False), bool):
+            raise ValueError("model-config.tuning.llm.enabled must be boolean")
+        if not isinstance(llm.get("max_rounds", 10), int) or not 0 <= llm.get("max_rounds", 10) <= 10:
+            raise ValueError("model-config.tuning.llm.max_rounds must be between 0 and 10")
+        if float(llm.get("min_improvement", 0.005)) < 0:
+            raise ValueError("model-config.tuning.llm.min_improvement must not be negative")
+        if int(llm.get("timeout_seconds", 60)) < 1:
+            raise ValueError("model-config.tuning.llm.timeout_seconds must be positive")
+        for key in ("request_retries", "max_consecutive_provider_errors"):
+            minimum = 1 if key == "max_consecutive_provider_errors" else 0
+            if not isinstance(llm.get(key, 2 if key == "request_retries" else 3), int) or llm.get(key, 2 if key == "request_retries" else 3) < minimum:
+                raise ValueError(f"model-config.tuning.llm.{key} is invalid")
+        if float(llm.get("retry_backoff_seconds", 2)) < 0:
+            raise ValueError("model-config.tuning.llm.retry_backoff_seconds must not be negative")
+        if not isinstance(llm.get("verify_ssl", True), bool):
+            raise ValueError("model-config.tuning.llm.verify_ssl must be boolean")
+        if llm.get("ca_bundle") is not None and not isinstance(llm.get("ca_bundle"), str):
+            raise ValueError("model-config.tuning.llm.ca_bundle must be a file path or null")
+        stopping = llm.get("stopping", {})
+        if not isinstance(stopping, dict):
+            raise ValueError("model-config.tuning.llm.stopping must be a mapping")
+        for key in ("plateau_rounds",):
+            if not isinstance(stopping.get(key, 2), int) or stopping.get(key, 2) < 1:
+                raise ValueError(f"model-config.tuning.llm.stopping.{key} must be a positive integer")
+        for key in ("plateau_min_improvement", "target_tolerance"):
+            if float(stopping.get(key, 0.0)) < 0:
+                raise ValueError(f"model-config.tuning.llm.stopping.{key} must not be negative")
+        targets = stopping.get("targets", {})
+        guardrails = stopping.get("guardrails", {})
+        if not isinstance(targets, dict) or not isinstance(guardrails, dict):
+            raise ValueError("model-config.tuning.llm.stopping.targets/guardrails must be mappings")
+        for key in ("validate_ks", "validate_auc", "oot_ks", "oot_auc"):
+            value = float(targets.get(key, 0.0))
+            if not 0 <= value <= 1:
+                raise ValueError(f"model-config.tuning.llm.stopping.targets.{key} must be between 0 and 1")
+        for key in ("max_train_validate_ks_gap", "max_validate_oot_ks_drop", "max_oot_degradation_vs_baseline"):
+            value = float(guardrails.get(key, 1.0))
+            if not 0 <= value <= 1:
+                raise ValueError(f"model-config.tuning.llm.stopping.guardrails.{key} must be between 0 and 1")
+        if int(guardrails.get("min_oot_bad_count", 30)) < 1:
+            raise ValueError("model-config.tuning.llm.stopping.guardrails.min_oot_bad_count must be positive")
     if node_id == "eda-analysis":
         if parameters.get("correlation_method") not in {"pearson", "spearman"}:
             raise ValueError("EDA node parameters.correlation_method must be pearson or spearman")
@@ -292,11 +509,47 @@ def _validate(node_id: str, parameters: dict[str, Any]) -> None:
             raise ValueError("eda-analysis.parameters.plot_top_n must be >= 0")
 
 
+def _restore_template_comments(path: Path, template_path: Path, node_id: str) -> None:
+    """Restore comments in a known commentless legacy config without changing values."""
+    current_text = path.read_text(encoding="utf-8")
+    if "#" in current_text:
+        return
+    try:
+        current = yaml.safe_load(current_text) or {}
+        template = yaml.safe_load(template_path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return
+    current_parameters = current.get("parameters")
+    template_parameters = template.get("parameters")
+    if (
+        current.get("node_id") != node_id
+        or not isinstance(current_parameters, dict)
+        or not isinstance(template_parameters, dict)
+        or set(current_parameters) != set(template_parameters)
+    ):
+        return
+
+    merged = template_path.read_text(encoding="utf-8")
+    for key, value in current_parameters.items():
+        encoded = json.dumps(value, ensure_ascii=False)
+        pattern = re.compile(rf"^(?P<indent>\s+){re.escape(key)}\s*:\s*.*$", re.MULTILINE)
+        merged, count = pattern.subn(
+            lambda match: f"{match.group('indent')}{key}: {encoded}",
+            merged,
+            count=1,
+        )
+        if count == 0:
+            return
+    path.write_text(merged, encoding="utf-8")
+    logger.info("Restored comments in legacy node config: %s", path)
+
+
 def ensure_node_configs(
     config_dir: str | Path,
     node_ids: Iterable[str],
     *,
     template_dir: str | Path | None = None,
+    skip_validation: set[str] | None = None,
 ) -> dict[str, NodeConfig]:
     """Load node configs and create editable defaults for missing files."""
     directory = Path(config_dir).expanduser().resolve()
@@ -306,21 +559,26 @@ def ensure_node_configs(
         if node_id not in DEFAULT_NODE_CONFIGS:
             raise ValueError(f"Unsupported workflow node: {node_id}")
         path = directory / NODE_CONFIG_FILENAMES[node_id]
+        template_path = (
+            Path(template_dir).expanduser().resolve()
+            / NODE_CONFIG_TEMPLATE_FILENAMES[node_id]
+            if template_dir is not None
+            else None
+        )
         if not path.is_file():
-            template_path = (
-                Path(template_dir).expanduser().resolve()
-                / NODE_CONFIG_TEMPLATE_FILENAMES[node_id]
-                if template_dir is not None
-                else None
-            )
             if template_path is not None and template_path.is_file():
-                body = yaml.safe_load(template_path.read_text(encoding="utf-8")) or {}
+                # Copy the source text, rather than safe_load/safe_dump, so
+                # comments in the user-facing template survive bootstrap.
+                path.write_text(template_path.read_text(encoding="utf-8"), encoding="utf-8")
             else:
                 body = {"node_id": node_id, **DEFAULT_NODE_CONFIGS[node_id]}
-            path.write_text(
-                yaml.safe_dump(body, allow_unicode=True, sort_keys=False),
-                encoding="utf-8",
-            )
+                path.write_text(
+                    yaml.safe_dump(body, allow_unicode=True, sort_keys=False),
+                    encoding="utf-8",
+                )
+        elif node_id == "data-read" and template_path is not None and template_path.is_file():
+            # Migrate files created by the pre-comment-preservation version.
+            _restore_template_comments(path, template_path, node_id)
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         if raw.get("node_id") != node_id:
             raise ValueError(f"Node config {path} must declare node_id={node_id!r}")
@@ -328,7 +586,8 @@ def ensure_node_configs(
         parameters = raw.get("parameters")
         if not isinstance(version, int) or version < 1 or not isinstance(parameters, dict):
             raise ValueError(f"Invalid node config structure: {path}")
-        _validate(node_id, parameters)
+        if node_id not in (skip_validation or set()):
+            _validate(node_id, parameters)
         configs[node_id] = NodeConfig(node_id, version, parameters, path)
         logger.info("Loaded node config: node_id=%s, path=%s", node_id, path)
     return configs

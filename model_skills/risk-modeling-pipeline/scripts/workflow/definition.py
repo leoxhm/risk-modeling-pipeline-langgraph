@@ -1,4 +1,8 @@
-"""Canonical eight-stage workflow contract shared by CLI, Skill, and UI."""
+"""Canonical engine execution contract shared by CLI and Skill.
+
+The OpenCode UI may fold related execution stages into one user-facing node;
+the engine keeps these IDs separate for auditability and compatibility.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +11,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class WorkflowNode:
-    """A user-facing stage; implementation details remain internal."""
+    """An engine stage; the UI may present a composite stage."""
 
     id: str
     name: str
@@ -31,7 +35,7 @@ WORKFLOW_NODES: tuple[WorkflowNode, ...] = (
     WorkflowNode(
         "sample-diagnosis",
         "样本诊断",
-        "基于 EDA 证据确认样本倾斜、月份异常、重复样本和样本处理策略",
+        "基于 EDA 证据诊断样本倾斜、月份异常、重复样本和数据质量问题",
         "sample",
     ),
     WorkflowNode(
@@ -58,12 +62,6 @@ WORKFLOW_NODES: tuple[WorkflowNode, ...] = (
         "审查过拟合、稳定性、泄漏和 OOT 风险",
         "review",
     ),
-    WorkflowNode(
-        "report-delivery",
-        "报告与模型交付",
-        "生成 EDA/建模报告、模型文件和可复现运行产物",
-        "delivery",
-    ),
 )
 
 MAIN_NODE_IDS = frozenset(node.id for node in WORKFLOW_NODES)
@@ -89,7 +87,9 @@ INTERNAL_TO_MAIN_NODE: dict[str, str] = {
     "training": "training-tuning",
     "review": "model-review",
     "eda-report": "eda-analysis",
-    "model-report": "report-delivery",
+    # Reports are generated inside the model-config composite node.
+    "model-report": "model-config",
+    "llm-tuning": "model-config",
 }
 
 def main_node_for(node_id: str) -> str:

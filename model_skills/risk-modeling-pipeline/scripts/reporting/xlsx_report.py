@@ -53,7 +53,9 @@ HEADER_LABELS = {
     "top_value_rate": "众数占比",
     "numeric_min": "最小值",
     "numeric_max": "最大值",
-    "numeric_mean": "均值",
+    "numeric_mean": "数值均值",
+    "mean": "均值",
+    "std": "标准差",
     "date_parse_rate": "日期解析率",
     "candidate_role": "候选角色",
     "role_reason": "判断依据",
@@ -64,6 +66,8 @@ HEADER_LABELS = {
     "metrics_backend": "指标后端",
     "iv": "IV",
     "ks": "KS",
+    "pr_auc": "PR-AUC",
+    "brier_score": "Brier Score",
     "auc_adjusted": "调整后AUC",
     "auc": "AUC",
     "bin_count": "分箱数",
@@ -78,9 +82,29 @@ HEADER_LABELS = {
     "good_distribution": "好样本分布",
     "woe": "WOE",
     "iv_bin": "分箱IV",
+    "cumulative_iv": "累计IV",
+    "cumulative_ks": "累计KS",
     "event_month": "月份",
     "baseline_month": "基准月",
     "psi": "PSI",
+    "average_psi": "平均PSI",
+    "max_psi": "最大PSI",
+    "train_iv": "Train IV",
+    "test_iv": "Test IV",
+    "validation_iv": "Validation IV（Test）",
+    "oot_iv": "OOT IV",
+    "train_missing_rate": "Train 缺失率",
+    "test_missing_rate": "Test 缺失率",
+    "validation_missing_rate": "Validation 缺失率（Test）",
+    "oot_missing_rate": "OOT 缺失率",
+    "train_gini": "Train Gini",
+    "test_gini": "Test Gini",
+    "validation_gini": "Validation Gini（Test）",
+    "oot_gini": "OOT Gini",
+    "train_entropy": "Train 信息熵",
+    "test_entropy": "Test 信息熵",
+    "validation_entropy": "Validation 信息熵（Test）",
+    "oot_entropy": "OOT 信息熵",
     "feature_1": "特征一",
     "feature_2": "特征二",
     "method": "方法",
@@ -95,9 +119,13 @@ HEADER_LABELS = {
     "gain_share": "Gain占比",
     "cumulative_gain_share": "累计Gain占比",
     "iteration": "迭代轮次",
+    "best_iteration": "最佳轮次",
     "train_auc": "Train AUC",
     "test_auc": "Test AUC",
     "train_ks": "Train KS",
+    "mean_best_iteration": "平均最佳轮次",
+    "min_best_iteration": "最小最佳轮次",
+    "max_best_iteration": "最大最佳轮次",
     "auc_gap": "AUC差距",
     "ks_gap": "KS差距",
     "is_best_iteration": "最佳轮次",
@@ -113,8 +141,29 @@ HEADER_LABELS = {
     "cumulative_bad_capture": "累计坏样本捕获率",
     "cumulative_good_capture": "累计好样本捕获率",
     "cumulative_lift": "累计Lift",
+    "fpr": "假阳性率",
+    "tpr": "真阳性率",
+    "mean_predicted": "平均预测概率",
+    "observed_bad_rate": "实际坏样本率",
+    "absolute_error": "校准绝对误差",
+    "estimate": "原始估计",
+    "lower": "置信区间下限",
+    "upper": "置信区间上限",
+    "rounds": "Bootstrap轮数",
+    "seed": "随机种子",
+    "dimension": "分群维度",
+    "group_value": "分群值",
+    "train_permutation_importance": "Train置换重要性",
+    "test_permutation_importance": "Test置换重要性",
+    "oot_permutation_importance": "OOT置换重要性",
     "best_test_auc_marker": "最佳轮次Test AUC",
     "candidate": "候选模型",
+    "parameters": "模型参数",
+    "selected_candidate": "是否最终采用",
+    "acceptance_metric": "接受指标",
+    "acceptance_score": "接受指标值",
+    "improvement_vs_baseline": "相对基线提升",
+    "min_improvement": "最低提升要求",
     "test_ks": "Test KS",
     "trial_number": "Trial编号",
     "state": "运行状态",
@@ -125,6 +174,11 @@ HEADER_LABELS = {
     "validation_bad_count": "验证坏样本数",
     "validation_auc": "验证AUC",
     "validation_ks": "验证KS",
+    "cv_strategy": "CV策略",
+    "train_month_start": "训练起始月",
+    "train_month_end": "训练结束月",
+    "validation_month_start": "验证起始月",
+    "validation_month_end": "验证结束月",
     "code": "审查编码",
     "severity": "严重等级",
     "message": "审查结论",
@@ -193,7 +247,7 @@ def _format_for(workbook: xlsxwriter.Workbook, header: str) -> xlsxwriter.format
         return workbook._formats["percent"]
     if any(
         token in text
-        for token in ("auc", "ks", "psi", "iv", "woe", "correlation", "lift", "gap")
+        for token in ("auc", "ks", "psi", "iv", "woe", "correlation", "lift", "gap", "brier", "gini", "entropy", "fpr", "tpr", "error")
     ):
         return workbook._formats["decimal"]
     if "count" in text or header in {
@@ -911,6 +965,8 @@ def write_eda_report(payload_path: str | Path, output_path: str | Path) -> Path:
     mrows = monthly_source.get("rows", [])
     month_idx = _index(mheaders, "event_month")
     sample_idx = _index(mheaders, "sample_count")
+    good_idx = _index(mheaders, "good_count")
+    bad_idx = _index(mheaders, "bad_count")
     rate_idx = _index(mheaders, "bad_rate")
     stability = _write_table(
         workbook,
@@ -934,6 +990,15 @@ def write_eda_report(payload_path: str | Path, output_path: str | Path) -> Path:
             },
         )
     psi_start, psi_count = _add_psi_summary(workbook, stability)
+    psi_summary = payload["tables"].get("7b.变量 PSI 汇总")
+    if psi_summary:
+        _write_table(
+            workbook,
+            "5b.PSI汇总",
+            "变量 PSI 汇总",
+            "按变量汇总平均 PSI 和最大 PSI，便于快速定位不稳定变量",
+            psi_summary,
+        )
     _write_table(
         workbook,
         "6.相关性分析",
@@ -941,6 +1006,39 @@ def write_eda_report(payload_path: str | Path, output_path: str | Path) -> Path:
         "优先查看绝对相关系数较高的字段对",
         payload["tables"]["8.相关性"],
     )
+    correlation_matrix = payload["tables"].get("8b.相关性矩阵")
+    if correlation_matrix:
+        correlation_matrix_table = _write_table(
+            workbook,
+            "6b.相关矩阵",
+            "变量相关性矩阵",
+            "数值型变量相关性矩阵；对角线为 1，空值表示有效样本不足",
+            correlation_matrix,
+        )
+        matrix_headers = correlation_matrix_table["headers"]
+        matrix_rows = correlation_matrix_table["rows"]
+        if len(matrix_headers) > 1 and matrix_rows:
+            # Signed heatmap: negative correlations are red, positive are
+            # blue, and white is zero. The same palette is used by the HTML
+            # report so the two report formats tell the same story.
+            correlation_matrix_table["sheet"].conditional_format(
+                correlation_matrix_table["data_row"],
+                1,
+                correlation_matrix_table["data_row"] + len(matrix_rows) - 1,
+                len(matrix_headers) - 1,
+                {
+                    "type": "3_color_scale",
+                    "min_type": "num",
+                    "min_value": -1,
+                    "min_color": "#FECACA",
+                    "mid_type": "num",
+                    "mid_value": 0,
+                    "mid_color": "#FFFFFF",
+                    "max_type": "num",
+                    "max_value": 1,
+                    "max_color": "#BFDBFE",
+                },
+            )
     binning = _write_table(
         workbook,
         "7.分箱明细",
@@ -999,31 +1097,60 @@ def write_eda_report(payload_path: str | Path, output_path: str | Path) -> Path:
                         "max_color": COLORS["red"],
                     },
                 )
-    if mrows and sample_idx >= 0 and rate_idx >= 0:
-        chart = workbook.add_chart({"type": "line"})
-        chart.add_series(
+    conclusion = payload["tables"].get("11.结果概述")
+    if conclusion:
+        _write_table(
+            workbook,
+            "10.结果概述",
+            "EDA 结果概述",
+            "根据本次实际计算结果自动生成；详细证据请回看前面的字段、分箱、稳定性和月度分析页。",
+            conclusion,
+            legend=False,
+        )
+    if mrows and month_idx >= 0 and rate_idx >= 0:
+        # Use stacked good/bad columns for volume and a separate percentage
+        # axis for bad rate. This keeps small months visible without mixing
+        # counts and rates on one scale.
+        if good_idx >= 0 and bad_idx >= 0:
+            chart = workbook.add_chart({"type": "column", "subtype": "stacked"})
+            for name, index, color in (("好样本", good_idx, COLORS["green"]), ("坏样本", bad_idx, COLORS["red_text"])):
+                chart.add_series(
+                    {
+                        "name": name,
+                        "categories": [monthly["sheet"].name, 4, month_idx, 3 + len(mrows), month_idx],
+                        "values": [monthly["sheet"].name, 4, index, 3 + len(mrows), index],
+                        "fill": {"color": color},
+                        "border": {"none": True},
+                    }
+                )
+            chart.set_y_axis({"name": "样本数", "min": 0, "major_gridlines": {"visible": True}})
+        else:
+            chart = workbook.add_chart({"type": "column"})
+            chart.add_series(
+                {
+                    "name": "样本数",
+                    "categories": [monthly["sheet"].name, 4, month_idx, 3 + len(mrows), month_idx],
+                    "values": [monthly["sheet"].name, 4, sample_idx, 3 + len(mrows), sample_idx],
+                    "fill": {"color": COLORS["blue"]},
+                }
+            )
+            chart.set_y_axis({"name": "样本数", "min": 0})
+        line = workbook.add_chart({"type": "line"})
+        line.add_series(
             {
-                "name": "坏样本率",
-                "categories": [
-                    monthly["sheet"].name,
-                    4,
-                    month_idx,
-                    3 + len(mrows),
-                    month_idx,
-                ],
-                "values": [
-                    monthly["sheet"].name,
-                    4,
-                    rate_idx,
-                    3 + len(mrows),
-                    rate_idx,
-                ],
-                "line": {"color": COLORS["blue"]},
+                "name": "坏账率",
+                "categories": [monthly["sheet"].name, 4, month_idx, 3 + len(mrows), month_idx],
+                "values": [monthly["sheet"].name, 4, rate_idx, 3 + len(mrows), rate_idx],
+                "line": {"color": COLORS["blue"], "width": 2.25},
+                "marker": {"type": "circle", "size": 5, "border": {"color": COLORS["blue"]}, "fill": {"color": COLORS["blue"]}},
+                "y2_axis": True,
             }
         )
-        chart.set_title({"name": "月度坏样本率"})
-        chart.set_y_axis({"num_format": "0.0%", "min": 0})
-        chart.set_size({"width": 430, "height": 270})
+        line.set_y2_axis({"name": "坏账率", "num_format": "0.0%", "min": 0})
+        chart.combine(line)
+        chart.set_title({"name": "月度样本规模与坏账率"})
+        chart.set_legend({"position": "bottom"})
+        chart.set_size({"width": 620, "height": 300})
         dashboard.insert_chart(19, 0, chart)
     top_count = min(10, len(payload["tables"]["4.单变量概览"]["rows"]))
     if top_count:
@@ -1142,7 +1269,8 @@ def _augment_lift_table(table: dict[str, Any]) -> dict[str, Any]:
         "cumulative_lift",
         "reliability",
     ]
-    if all(name in headers for name in additions):
+    missing_additions = [name for name in additions if name not in headers]
+    if not missing_additions:
         return {"headers": headers, "rows": rows}
     dataset_idx = _index(headers, "dataset")
     sample_idx = _index(headers, "sample_count")
@@ -1168,13 +1296,14 @@ def _augment_lift_table(table: dict[str, Any]) -> dict[str, Any]:
                 if bad_capture is not None and sample_rate
                 else None
             )
-            output[index] = rows[index] + [
-                sample_rate,
-                bad_capture,
-                cumulative_lift,
-                _reliability(bad_count, sample_count),
-            ]
-    return {"headers": headers + additions, "rows": output}
+            calculated = {
+                "cumulative_sample_rate": sample_rate,
+                "cumulative_bad_capture": bad_capture,
+                "cumulative_lift": cumulative_lift,
+                "reliability": _reliability(bad_count, sample_count),
+            }
+            output[index] = rows[index] + [calculated[name] for name in missing_additions]
+    return {"headers": headers + missing_additions, "rows": output}
 
 
 def _add_effect_chart(effect: dict[str, Any]) -> None:
@@ -1436,26 +1565,30 @@ def write_model_report(payload_path: str | Path, output_path: str | Path) -> Pat
     if "4.特征重要性" in tables:
         source = tables["4.特征重要性"]
         gain_idx = _index(source["headers"], "gain_importance")
-        total = (
-            sum(float(row[gain_idx] or 0) for row in source["rows"])
-            if gain_idx >= 0
-            else 0.0
-        )
-        cumulative = 0.0
-        rows = []
-        for row in source["rows"]:
-            share = float(row[gain_idx] or 0) / total if total else 0.0
-            cumulative += share
-            rows.append(list(row) + [share, cumulative])
+        if "gain_share" in source["headers"] and "cumulative_gain_share" in source["headers"]:
+            importance_table = source
+        else:
+            total = (
+                sum(float(row[gain_idx] or 0) for row in source["rows"])
+                if gain_idx >= 0
+                else 0.0
+            )
+            cumulative = 0.0
+            rows = []
+            for row in source["rows"]:
+                share = float(row[gain_idx] or 0) / total if total else 0.0
+                cumulative += share
+                rows.append(list(row) + [share, cumulative])
+            importance_table = {
+                "headers": source["headers"] + ["gain_share", "cumulative_gain_share"],
+                "rows": rows,
+            }
         _write_table(
             workbook,
             "4.特征重要性",
             "特征重要性",
             "Gain 占比说明模型依赖程度，不代表因果关系或风险方向",
-            {
-                "headers": source["headers"] + ["gain_share", "cumulative_gain_share"],
-                "rows": rows,
-            },
+            importance_table,
         )
     if "5.训练过程" in tables:
         training = _write_table(
@@ -1610,6 +1743,15 @@ def write_model_report(payload_path: str | Path, output_path: str | Path) -> Pat
             _augment_model_table("8.月度表现", tables["8.月度表现"]),
         )
     for key, sheet_name, title in [
+        ("9.模型稳定性", "9.模型稳定性", "模型稳定性分析"),
+        ("15.入模变量信息", "15.入模变量", "入模变量信息（IV、缺失率、Gini、信息熵）"),
+        ("16.ROC曲线", "16.ROC曲线", "ROC 曲线数据"),
+        ("17.KS曲线", "17.KS曲线", "训练集 KS 曲线数据"),
+        ("18.校准曲线", "18.校准曲线", "模型概率校准曲线"),
+        ("19.Bootstrap置信区间", "19.Bootstrap区间", "Bootstrap 指标置信区间"),
+        ("20.随机种子稳定性", "20.随机种子稳定性", "不同随机种子下的效果波动"),
+        ("21.分群效果", "21.分群效果", "月份及低基数分群效果"),
+        ("22.跨数据集特征重要性", "22.跨数据集重要性", "Train/Test/OOT 特征重要性变化"),
         ("10.候选模型", "10.候选模型", "Baseline 与调参候选模型"),
         ("11.调参试验", "11.调参试验", "Optuna Trial 调参明细"),
         ("12.CV折表现", "12.CV折表现", "Train 内部交叉验证明细"),

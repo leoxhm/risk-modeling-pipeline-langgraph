@@ -7,8 +7,8 @@ diagnostics:
 
 treatment:
   duplicate_action: keep_first
-  missing_target_action: error
+  missing_target_action: drop
   all_null_feature_action: drop
   high_missing_row_action: keep
-  incomplete_latest_month_action: error
+  incomplete_latest_month_action: exclude
   class_imbalance_action: class_weight

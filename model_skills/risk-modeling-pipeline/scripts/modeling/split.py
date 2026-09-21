@@ -18,11 +18,12 @@ logger = get_logger(__name__)
 
 @dataclass(frozen=True)
 class DataSplitResult:
-    """Disjoint train/test/OOT samples and an auditable split summary."""
+    """Disjoint Train/Test/OOT samples and an auditable split summary."""
 
     train: pl.DataFrame
     test: pl.DataFrame
     oot: pl.DataFrame
+    test_month_values: tuple[str, ...]
     oot_month_values: tuple[str, ...]
     summary: pl.DataFrame
 
@@ -64,10 +65,12 @@ def split_dataset(
     contract: ValidatedDataContract,
     config: SplitConfig,
 ) -> DataSplitResult:
-    """Reserve latest complete months for OOT, then stratify development data.
+    """Reserve latest months for OOT and preceding months for Test.
 
-    ``event_month`` must originate from preprocessing. The newest ``oot_months``
+    event_month must originate from preprocessing. The newest oot_months
     observed values are never used in feature selection or parameter tuning.
+    The default time strategy makes Test a contiguous block immediately before
+    OOT. The random_stratified strategy remains available for legacy runs.
     """
     required_columns = {"event_month", contract.contract.target_col}
     missing_columns = required_columns - set(data.columns)
@@ -93,11 +96,24 @@ def split_dataset(
         raise DataContractError("OOT or development sample is empty after chronological split")
 
     target_col = contract.contract.target_col
-    test_row_ids = _stratified_test_row_ids(development, target_col, config)
-    test = development.filter(pl.col("__split_row_id").is_in(test_row_ids)).drop("__split_row_id")
-    train = development.filter(~pl.col("__split_row_id").is_in(test_row_ids)).drop("__split_row_id")
+    if config.strategy == "time":
+        development_months = month_values[: len(month_values) - config.oot_months]
+        if len(development_months) <= config.test_months:
+            raise DataContractError(
+                "Not enough development months for chronological Train/Test split: "
+                f"found={len(development_months)}, test_months={config.test_months}"
+            )
+        test_month_values = tuple(development_months[-config.test_months :])
+        is_test = pl.col("event_month").cast(pl.String).is_in(test_month_values)
+        test = development.filter(is_test).drop("__split_row_id")
+        train = development.filter(~is_test).drop("__split_row_id")
+    else:
+        test_month_values = ()
+        test_row_ids = _stratified_test_row_ids(development, target_col, config)
+        test = development.filter(pl.col("__split_row_id").is_in(test_row_ids)).drop("__split_row_id")
+        train = development.filter(~pl.col("__split_row_id").is_in(test_row_ids)).drop("__split_row_id")
     if train.is_empty() or test.is_empty():
-        raise DataContractError("Train or test sample is empty after stratified development split")
+        raise DataContractError("Train or test sample is empty after development split")
 
     summary = pl.DataFrame(
         [
@@ -113,4 +129,4 @@ def split_dataset(
         oot.height,
         list(oot_month_values),
     )
-    return DataSplitResult(train, test, oot, oot_month_values, summary)
+    return DataSplitResult(train, test, oot, test_month_values, oot_month_values, summary)

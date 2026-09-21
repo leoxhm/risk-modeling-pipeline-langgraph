@@ -1,4 +1,10 @@
-"""Feature statistics, user-confirmed selection, and preprocessing node."""
+"""Feature statistics, preprocessing, and selection node.
+
+The node first computes feature evidence and recommendations, then pauses for
+result confirmation. Only the confirmed pass applies the YAML and writes the
+processed data. ``--confirm-config`` remains a backwards-compatible alias for
+the explicit confirmation pass.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +18,12 @@ from typing import Any
 import polars as pl
 import yaml
 
-from ..common import NodeContext, write_json
+from ..common import (
+    NodeContext,
+    approval_path as node_approval_path,
+    write_json,
+    write_node_summary,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -25,6 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir")
     parser.add_argument("--run-id")
     parser.add_argument("--confirm-config", action="store_true")
+    parser.add_argument(
+        "--confirm-result",
+        action="store_true",
+        help="Confirm the completed feature-processing result",
+    )
     return parser
 
 
@@ -88,12 +104,18 @@ def _config_objects(parameters: dict[str, Any]):
 
 
 def _require_approval(context: NodeContext, node_id: str) -> tuple[dict[str, Any], Path]:
-    path = context.node_config_dir / f"{node_id}.approval.json"
+    path = node_approval_path(context, node_id)
     if not path.is_file():
+        if node_id == "eda-analysis":
+            raise RuntimeError("EDA has not been completed. Run the eda-analysis node first.")
         raise RuntimeError(
             f"{node_id}.yaml has not been confirmed. Complete the {node_id} node with --confirm-config first."
         )
     approval = json.loads(path.read_text(encoding="utf-8"))
+    if approval.get("status") != "approved":
+        raise RuntimeError(
+            f"{node_id} has not been result-confirmed; run workflow confirm {node_id} first."
+        )
     config_path = context.node_config_dir / f"{node_id}.yaml"
     if approval.get("config_sha256") != _hash(config_path):
         raise RuntimeError(f"{config_path.name} changed after confirmation; rerun {node_id}.")
@@ -124,14 +146,14 @@ def _prepare_data(context: NodeContext, data: pl.DataFrame, validated):
 
 
 def _apply_confirmed_sample_policy(context: NodeContext, data: pl.DataFrame, validated):
-    approval_path = context.node_config_dir / "sample-diagnosis.approval.json"
-    if not approval_path.is_file():
+    sample_approval_path = node_approval_path(context, "sample-diagnosis")
+    if not sample_approval_path.is_file():
         return data, validated, None
     from data.contract import validate_contract
     from preprocessing.sample_config import load_sample_config
     from preprocessing.sample_diagnostics import apply_sample_treatment
 
-    approval = json.loads(approval_path.read_text(encoding="utf-8"))
+    approval = json.loads(sample_approval_path.read_text(encoding="utf-8"))
     policy_path = Path(approval.get("policy_config") or approval.get("sample_config", ""))
     if not policy_path.is_absolute():
         policy_path = (context.project_root / policy_path).resolve()
@@ -181,7 +203,7 @@ def _write_selection_summary(decisions: pl.DataFrame, dropped_by_type: list[str]
     excluded = [row for row in rows if str(row.get("decision", "")).startswith("excluded")]
     review = [row for row in rows if row.get("decision") == "retained_review"]
     retained = [row for row in rows if row.get("decision") == "retained"]
-    lines = ["# 特征筛选结果（确认后生成）", "", f"- 保留字段：{len(retained)}", f"- 需复核字段：{len(review)}", f"- 按质量/IV/相关性/稳定性剔除：{len(excluded)}", f"- 按变量类型预处理剔除：{len(dropped_by_type)}", ""]
+    lines = ["# 特征筛选结果", "", f"- 保留字段：{len(retained)}", f"- 需复核字段：{len(review)}", f"- 按质量/IV/相关性/稳定性剔除：{len(excluded)}", f"- 按变量类型预处理剔除：{len(dropped_by_type)}", ""]
     for title, items in (("保留字段", retained), ("需复核字段", review), ("剔除字段", excluded)):
         lines.extend([f"## {title}", "", "| 字段 | 决策 | 原因 |", "| --- | --- | --- |"])
         if not items:
@@ -199,8 +221,140 @@ def _write_selection_summary(decisions: pl.DataFrame, dropped_by_type: list[str]
     return path
 
 
+def _build_processing_summary(
+    *,
+    working_data: pl.DataFrame,
+    processed: pl.DataFrame,
+    decisions: pl.DataFrame,
+    dropped_by_type: list[str],
+    parameters: dict[str, Any],
+    stats: pl.DataFrame,
+) -> str:
+    """Build the compact result table shown after feature processing."""
+    rows = decisions.to_dicts()
+    excluded = [row for row in rows if str(row.get("decision", "")).startswith("excluded")]
+    review = [row for row in rows if row.get("decision") == "retained_review"]
+    retained = [row for row in rows if row.get("decision") == "retained"]
+    def compact(items: list[dict[str, Any]], limit: int = 8) -> str:
+        values = [
+            f"`{item.get('feature', '—')}`（{item.get('reason', '未记录原因')}）"
+            for item in items[:limit]
+        ]
+        if len(items) > limit:
+            values.append(f"…等 {len(items)} 个")
+        return "；".join(values) if values else "无"
+
+    def feature_names(items: list[dict[str, Any]], limit: int = 10) -> str:
+        values = [f"`{item.get('feature', '—')}`" for item in items[:limit]]
+        if len(items) > limit:
+            values.append(f"…等 {len(items)} 个")
+        return "、".join(values) if values else "无"
+
+    selection = parameters.get("selection", {})
+    preprocessing = parameters.get("preprocessing", {})
+    numeric = preprocessing.get("numeric", {})
+    categorical = preprocessing.get("categorical", {})
+    text = preprocessing.get("text", {})
+    # Type preprocessing decisions are kept separately because those fields
+    # can be dropped after the quality/IV/correlation selection pass.
+    type_drop_names = [f"`{feature}`" for feature in dropped_by_type[:8]]
+    if len(dropped_by_type) > 8:
+        type_drop_names.append(f"…等 {len(dropped_by_type)} 个")
+    type_drop_text = "、".join(type_drop_names) if type_drop_names else "无"
+    max_missing = float(selection.get("max_missing_rate", 0.80))
+    quality_distribution = _distribution_summary(stats)
+
+    def metric_range(name: str, digits: int = 4) -> str:
+        value = quality_distribution.get(name, {})
+        if value.get("min") is None:
+            return "—"
+        return f"{value['min']:.{digits}f}–{value['max']:.{digits}f}（均值 {value['mean']:.{digits}f}）"
+
+    table_rows = [
+        ("数据概况", "输入规模", f"{working_data.height:,} 行 × {len(rows):,} 个候选特征", "按已确认 data-read 角色重新读取；本节点只做特征处理"),
+        ("字段去留", "直接保留", f"{len(retained):,} 个", feature_names(retained) or "无"),
+        ("字段去留", "待复核（暂保留）", f"{len(review):,} 个", f"{feature_names(review)}；存在稳定性或集中度提示，建议人工复核"),
+        ("字段去留", "规则剔除", f"{len(excluded):,} 个", f"{compact(excluded)}；过多时仅展示前 8 个，完整清单见 feature_selection_summary.md"),
+        ("字段去留", "变量类型剔除", f"{len(dropped_by_type):,} 个", f"{type_drop_text}；按文本、近似主键、高基数或不支持类型策略处理"),
+        ("处理结果", "输出数据", f"{processed.height:,} 行 × {processed.width:,} 列", "已生成 processed_data.parquet；预处理规则按当前 YAML 执行"),
+        ("筛选阈值", "缺失率", f"≤ {max_missing:.0%}", "超过阈值的字段进入剔除或复核，取决于当前策略"),
+        ("筛选阈值", "信息价值（IV）", f"≥ {float(selection.get('min_iv', 0.02)):.2f}", "低于阈值表示单变量区分度弱"),
+        ("筛选阈值", "最大月度 PSI", f"≤ {float(selection.get('max_psi', 0.25)):.2f}", "超过阈值默认标记复核；稳定性 action={}".format(selection.get("stability_action", "review"))),
+        ("筛选阈值", "相关系数绝对值", f"≤ {float(selection.get('max_correlation', 0.80)):.2f}", "超过阈值的高相关字段按 IV/缺失率等证据择优"),
+        ("实际指标", "IV 范围", metric_range("iv"), "完整字段级值见 feature_statistics.csv"),
+        ("实际指标", "KS 范围", metric_range("ks"), "完整字段级值见 feature_statistics.csv"),
+        ("实际指标", "最大月度 PSI 范围", metric_range("max_monthly_psi"), "完整字段级值见 feature_statistics.csv"),
+        ("预处理策略", "数值变量", f"invalid_to_null={bool(numeric.get('invalid_to_null', True))}；missing_strategy={numeric.get('missing_strategy', 'native')}", "无穷值转空值，缺失由 LightGBM 原生处理"),
+        ("预处理策略", "类别变量", str(categorical.get("strategy", "lightgbm_native")), "按当前 YAML 的类别编码、稀有类别和高基数策略处理"),
+        ("预处理策略", "文本变量", str(text.get("action", "drop")), "默认删除文本字段，避免未经确认的语义建模"),
+    ]
+    lines = ["## 特征预处理与筛选完成", "", "| 类别 | 字段/指标 | 当前结果 | 说明 |", "|---|---|---|---|"]
+    lines.extend(
+        "| " + " | ".join(str(value).replace("|", "\\|").replace("\n", " ") for value in row) + " |"
+        for row in table_rows
+    )
+    lines.extend(["", "完整剔除原因、字段指标和预处理计划请查看 feature_selection_summary.md、feature_statistics.csv 和 feature_processing_report.html。"])
+    return "\n".join(lines)
+
+
 def run(args: argparse.Namespace) -> dict:
     context = NodeContext.from_args(args, "feature-processing")
+    # Feature processing uses the current workspace YAML immediately. The
+    # user receives the computed result first; only the result (not the YAML)
+    # must be confirmed before the next node starts.
+    confirmed = bool(getattr(args, "confirm_result", False) or getattr(args, "confirm_config", False))
+    config_path = context.config.path
+    config_hash = _hash(config_path)
+    prior_approval_path = node_approval_path(context, "feature-processing")
+    prior_approval: dict[str, Any] = {}
+    if prior_approval_path.is_file():
+        try:
+            prior_approval = json.loads(prior_approval_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            prior_approval = {}
+    # Confirmation/retry commands are idempotent. Once a result has already
+    # been approved, return its existing artifacts instead of recomputing the
+    # node and making the host produce another feedback card.
+    if (
+        confirmed
+        and prior_approval.get("status") == "approved"
+        and prior_approval.get("config_sha256") == config_hash
+    ):
+        return {
+            "status": "success",
+            "node_id": "feature-processing",
+            "summary": "特征处理结果已确认，可进入下一个已选节点。",
+            "approval": str(prior_approval_path),
+            "processed_data": prior_approval.get("processed_data"),
+            "manifest": prior_approval.get("manifest"),
+            "display_files": [
+                str(item)
+                for item in (
+                    prior_approval.get("manifest"),
+                    prior_approval.get("processed_data"),
+                )
+                if item and Path(str(item)).is_file()
+            ],
+        }
+    if (
+        not confirmed
+        and prior_approval.get("status") == "awaiting_user_confirmation"
+        and prior_approval.get("config_sha256") == config_hash
+    ):
+        return {
+            "status": "awaiting_user_confirmation",
+            "node_id": "feature-processing",
+            "summary": "特征处理结果已生成，等待用户确认后进入模型配置。",
+            "approval": str(prior_approval_path),
+            "display_files": [
+                str(item)
+                for item in (
+                    prior_approval.get("manifest"),
+                    prior_approval.get("processed_data"),
+                )
+                if item and Path(str(item)).is_file()
+            ],
+        }
     from data.contract import validate_contract
     from eda.analytics import build_eda_analysis
     from modeling.feature_selection import select_features
@@ -209,7 +363,7 @@ def run(args: argparse.Namespace) -> dict:
 
     _require_approval(context, "data-read")
     _require_approval(context, "eda-analysis")
-    with context.progress.track("loader", running_summary="正在按已确认配置重新读取数据", success_summary="特征处理数据读取完成"):
+    with context.progress.track("loader", running_summary="正在按当前配置重新读取数据", success_summary="特征处理数据读取完成"):
         loaded = context.reload_data()
         validated = validate_contract(loaded.data, context.effective_contract, allow_id_duplicates=True, allow_target_issues=True)
         working_data, working_contract = _prepare_data(context, loaded.data, validated)
@@ -226,6 +380,7 @@ def run(args: argparse.Namespace) -> dict:
         max_categories=int(eda_params.get("max_categories", 20)),
         correlation_method=str(eda_params.get("correlation_method", "pearson")),
         metrics_backend=str(eda_params.get("metrics_backend", "toad")),
+        binning_method=str(eda_params.get("binning_method", "chi")),
     )
     overview = analysis.univariate_overview
     psi_summary = (
@@ -246,7 +401,7 @@ def run(args: argparse.Namespace) -> dict:
     statistics_preview = _write_markdown_table(
         stats,
         context.output_dir / "feature_statistics.md",
-        "字段级特征统计（请确认）",
+        "字段级特征统计",
     )
     correlation_path = context.output_dir / "feature_correlations.csv"
     analysis.correlation_pairs.write_csv(correlation_path)
@@ -270,13 +425,27 @@ def run(args: argparse.Namespace) -> dict:
             "correlation_pair_count": analysis.correlation_pairs.height,
         },
     )
-    config_path = context.config.path
+    # Do not call a separate node-parameter advisor here. The host LLM turns
+    # deterministic evidence into a concise summary and textual suggestions;
+    # no recommendation YAML is generated and no extra model service is needed.
+    llm_advice = {
+        "status": "disabled",
+        "proposal": {},
+        "reason": "节点只返回总结和文字化参数建议，由宿主基于确定性证据生成",
+    }
+    recommendation_path = context.output_dir / "feature-processing.llm-recommended.yaml"
+    auto_apply = True
     confirmation = write_json(
         context.output_dir / "feature_processing_confirmation.json",
         {
             "node_id": "feature-processing",
-            "status": "confirmed" if args.confirm_config else "awaiting_user_confirmation",
-            "message": "请确认 feature-processing.yaml 中的筛选阈值和不同变量类型的预处理方法。确认前只统计证据，不生成处理数据；确认后才生成 processed_data.parquet。",
+            "status": "approved" if confirmed else "awaiting_user_confirmation",
+            "user_confirmation_required": not confirmed,
+            "message": (
+                "已按当前 feature-processing.yaml（或默认值）执行并生成 processed_data.parquet。"
+                if confirmed
+                else "特征统计、筛选证据和大模型建议已生成。"
+            ),
             "config_path": str(config_path),
             "config_sha256": _hash(config_path),
             "data_read_config_sha256": _hash(context.data_read_config.path),
@@ -285,14 +454,12 @@ def run(args: argparse.Namespace) -> dict:
             "correlations": str(correlation_path),
             "distribution": _distribution_summary(stats),
             "correlation_pair_count": analysis.correlation_pairs.height,
-            "display_files": [str(config_path)],
+            "display_files": [str(config_path), str(feature_report_path), str(statistics_preview)],
             "parameters": context.config.parameters,
+            "llm_advice": llm_advice,
+            "llm_recommendation": str(recommendation_path) if recommendation_path.is_file() else None,
         },
     )
-    if not args.confirm_config:
-        context.progress.emit("feature-processing", "waiting_confirmation", summary="等待用户确认特征筛选阈值和预处理方法", artifacts=[stats_path, statistics_preview, correlation_path, feature_report_path, summary_path, confirmation])
-        return {"status": "awaiting_user_confirmation", "node_id": "feature-processing", "statistics": str(stats_path), "statistics_preview": str(statistics_preview), "correlations": str(correlation_path), "html_report": str(feature_report_path), "config": str(config_path), "distribution": _distribution_summary(stats), "display_files": [str(config_path), str(feature_report_path)], "confirmation": str(confirmation)}
-
     selected_config, preprocessing_config = _config_objects(context.config.parameters)
     model_data, model_contract, sample_policy = _apply_confirmed_sample_policy(context, loaded.data, validated)
     model_data, model_contract = _prepare_data(context, model_data, model_contract)
@@ -334,7 +501,7 @@ def run(args: argparse.Namespace) -> dict:
         context.output_dir / "feature_processing_manifest.json",
         {
             "node_id": "feature-processing",
-            "status": "success",
+            "status": "approved" if confirmed else "awaiting_user_confirmation",
             "config": str(config_path),
             "config_sha256": _hash(config_path),
             "statistics": str(stats_path),
@@ -350,11 +517,67 @@ def run(args: argparse.Namespace) -> dict:
         },
     )
     approval = write_json(
-        context.node_config_dir / "feature-processing.approval.json",
-        {"node_id": "feature-processing", "status": "approved", "config": str(config_path), "config_sha256": _hash(config_path), "manifest": str(manifest), "processed_data": str(processed_path) if processed_path.is_file() else None},
+        node_approval_path(context, "feature-processing", for_write=True),
+        {"node_id": "feature-processing", "status": "approved" if confirmed else "awaiting_user_confirmation", "config": str(config_path), "config_sha256": _hash(config_path), "manifest": str(manifest), "processed_data": str(processed_path) if processed_path.is_file() else None},
     )
-    context.progress.emit("feature-processing", "success", summary="特征筛选与预处理完成，已生成处理数据和字段去留清单", artifacts=[stats_path, selection_path, selection_summary, selection_summary_json, preprocessing_path, feature_report_path, manifest, approval, *([processed_path] if processed_path.is_file() else [])])
-    return {"status": "success", "node_id": "feature-processing", "statistics": str(stats_path), "feature_selection": str(selection_path), "feature_selection_summary": str(selection_summary), "feature_selection_summary_json": str(selection_summary_json), "preprocessing_plan": str(preprocessing_path), "html_report": str(feature_report_path), "processed_data": str(processed_path) if processed_path.is_file() else None, "manifest": str(manifest), "approval": str(approval), "display_files": [str(config_path), str(feature_report_path)]}
+    retained_count = len(selection.feature_cols)
+    excluded_count = len(selection.decisions.filter(pl.col("decision").str.starts_with("excluded")))
+    dropped_type_count = len(plan.dropped_features)
+    summary_text = _build_processing_summary(
+        working_data=model_data,
+        processed=processed,
+        decisions=selection.decisions,
+        dropped_by_type=list(plan.dropped_features),
+        parameters=context.config.parameters,
+        stats=stats,
+    )
+    node_summary = write_node_summary(
+        context.output_dir,
+        "feature-processing",
+        summary_text,
+        {
+            "retained_count": retained_count,
+            "excluded_count": excluded_count,
+            "dropped_by_type_count": dropped_type_count,
+            "selection_summary": str(selection_summary),
+            "processed_data": str(processed_path) if processed_path.is_file() else None,
+            "recommendations": [
+                (
+                    "建议复核剔除字段及其缺失率、IV、相关性和稳定性证据；如需调整，编辑 feature-processing.yaml 后重新运行本节点。"
+                    if excluded_count or dropped_type_count
+                    else "当前筛选规则未剔除字段，可继续执行模型配置与训练。"
+                )
+            ],
+        },
+    )
+    artifacts = [stats_path, statistics_preview, selection_path, selection_summary, selection_summary_json, preprocessing_path, feature_report_path, manifest, approval, node_summary, *([processed_path] if processed_path.is_file() else [])]
+    if not confirmed:
+        context.progress.emit(
+            "feature-processing",
+            "waiting_confirmation",
+            summary=summary_text + "\n\n请确认以上特征处理结果后再进入下一个节点；如需调整，请直接提出文字修改要求。",
+            artifacts=artifacts,
+        )
+        return {
+            "status": "awaiting_user_confirmation",
+            "node_id": "feature-processing",
+            "statistics": str(stats_path),
+            "statistics_preview": str(statistics_preview),
+            "feature_selection": str(selection_path),
+            "feature_selection_summary": str(selection_summary),
+            "feature_selection_summary_json": str(selection_summary_json),
+            "preprocessing_plan": str(preprocessing_path),
+            "html_report": str(feature_report_path),
+            "processed_data": str(processed_path) if processed_path.is_file() else None,
+            "manifest": str(manifest),
+            "approval": str(approval),
+            "node_summary": str(node_summary),
+            "display_files": [str(feature_report_path), str(selection_summary), str(statistics_preview)],
+            "auto_applied": auto_apply,
+            "llm_advice": llm_advice,
+        }
+    context.progress.emit("feature-processing", "success", summary=summary_text, artifacts=artifacts)
+    return {"status": "success", "node_id": "feature-processing", "statistics": str(stats_path), "statistics_preview": str(statistics_preview), "feature_selection": str(selection_path), "feature_selection_summary": str(selection_summary), "feature_selection_summary_json": str(selection_summary_json), "preprocessing_plan": str(preprocessing_path), "html_report": str(feature_report_path), "processed_data": str(processed_path) if processed_path.is_file() else None, "manifest": str(manifest), "approval": str(approval), "node_summary": str(node_summary), "display_files": [str(feature_report_path), str(selection_summary), str(statistics_preview)], "auto_applied": auto_apply, "llm_advice": llm_advice}
 
 
 def main() -> int:

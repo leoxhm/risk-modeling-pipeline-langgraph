@@ -19,9 +19,12 @@ class ModelConfigError(ValueError):
 
 @dataclass(frozen=True)
 class SplitConfig:
-    """Rules for reserving OOT data and sampling the development test set."""
+    """Rules for chronological Train/Test/OOT partitioning."""
 
+    strategy: str
     oot_months: int
+    test_months: int
+    # Kept for backward-compatible YAML parsing and the optional legacy mode.
     test_ratio: float
     random_seed: int
 
@@ -84,6 +87,8 @@ class TrainingConfig:
     """Select a deterministic baseline run or an Optuna tuning run."""
 
     mode: str
+    acceptance_metric: str
+    min_improvement: float
 
 
 @dataclass(frozen=True)
@@ -104,19 +109,26 @@ class TuningSearchSpace:
 
 @dataclass(frozen=True)
 class TuningConfig:
-    """Optuna budget, validation safeguards, and objective penalties."""
+    """Optuna budget, time-validation safeguards, and objective penalties."""
 
     sampler: str
     n_trials: int
     timeout_seconds: int
     startup_trials: int
+    cv_strategy: str
     cv_folds: int
+    validation_months: int
+    gap_months: int
+    min_train_months: int
     random_seed: int
     min_bad_samples_per_fold: int
     auc_gap_penalty: float
     fold_std_penalty: float
     objective_metric: str
     search_space: TuningSearchSpace
+    # Mutually exclusive tuning backend: ``none``, ``optuna`` or ``llm``.
+    # Kept at the end with a default for backward-compatible constructors.
+    method: str = "llm"
 
 
 @dataclass(frozen=True)
@@ -201,8 +213,10 @@ def load_model_config(path: str | Path) -> ModelConfig:
         merged_search = {**default_search, **search_raw}
         config = ModelConfig(
             split=SplitConfig(
+                strategy=str(split_raw.get("strategy", "time")),
                 oot_months=int(split_raw["oot_months"]),
-                test_ratio=float(split_raw["test_ratio"]),
+                test_months=int(split_raw.get("test_months", 2)),
+                test_ratio=float(split_raw.get("test_ratio", 0.2)),
                 random_seed=int(split_raw["random_seed"]),
             ),
             feature_preprocessing=FeaturePreprocessingConfig(
@@ -243,13 +257,21 @@ def load_model_config(path: str | Path) -> ModelConfig:
                     selection_raw.get("correlation_method", "spearman")
                 ),
             ),
-            training=TrainingConfig(mode=str(training_raw.get("mode", "baseline"))),
+            training=TrainingConfig(
+                mode=str(training_raw.get("mode", "baseline")),
+                acceptance_metric=str(training_raw.get("acceptance_metric", "ks")),
+                min_improvement=float(training_raw.get("min_improvement", 0.0)),
+            ),
             tuning=TuningConfig(
                 sampler=str(tuning_raw.get("sampler", "tpe")),
                 n_trials=int(tuning_raw.get("n_trials", 50)),
                 timeout_seconds=int(tuning_raw.get("timeout_seconds", 900)),
                 startup_trials=int(tuning_raw.get("startup_trials", 10)),
+                cv_strategy=str(tuning_raw.get("cv_strategy", "rolling")),
                 cv_folds=int(tuning_raw.get("cv_folds", 3)),
+                validation_months=int(tuning_raw.get("validation_months", 1)),
+                gap_months=int(tuning_raw.get("gap_months", 0)),
+                min_train_months=int(tuning_raw.get("min_train_months", 3)),
                 random_seed=int(tuning_raw.get("random_seed", split_raw["random_seed"])),
                 min_bad_samples_per_fold=int(tuning_raw.get("min_bad_samples_per_fold", 20)),
                 auc_gap_penalty=float(tuning_raw.get("auc_gap_penalty", 0.5)),
@@ -267,6 +289,7 @@ def load_model_config(path: str | Path) -> ModelConfig:
                     lambda_l2=_range(merged_search, "lambda_l2", float),
                     min_gain_to_split=_range(merged_search, "min_gain_to_split", float),
                 ),
+                method=str(tuning_raw.get("method", "llm")).strip().lower(),
             ),
             model=LightGbmConfig(
                 objective=str(model_raw["objective"]),
@@ -291,6 +314,10 @@ def load_model_config(path: str | Path) -> ModelConfig:
 
     if config.split.oot_months < 1:
         raise ModelConfigError("split.oot_months must be at least 1")
+    if config.split.test_months < 1:
+        raise ModelConfigError("split.test_months must be at least 1")
+    if config.split.strategy not in {"time", "random_stratified"}:
+        raise ModelConfigError("split.strategy must be 'time' or 'random_stratified'")
     if not 0 < config.split.test_ratio < 1:
         raise ModelConfigError("split.test_ratio must be between 0 and 1")
     for name, value in (
@@ -332,14 +359,26 @@ def load_model_config(path: str | Path) -> ModelConfig:
         raise ModelConfigError("model.objective must be 'binary' for this workflow")
     if config.training.mode not in {"baseline", "tuning"}:
         raise ModelConfigError("training.mode must be 'baseline' or 'tuning'")
+    if config.training.acceptance_metric not in {"auc", "ks"}:
+        raise ModelConfigError("training.acceptance_metric must be 'auc' or 'ks'")
+    if config.training.min_improvement < 0:
+        raise ModelConfigError("training.min_improvement must not be negative")
     if config.tuning.sampler != "tpe":
         raise ModelConfigError("tuning.sampler currently supports only 'tpe'")
+    if config.tuning.method not in {"none", "optuna", "llm"}:
+        raise ModelConfigError("tuning.method must be 'none', 'optuna' or 'llm'")
     if config.tuning.objective_metric not in {"auc", "ks"}:
         raise ModelConfigError("tuning.objective_metric must be 'auc' or 'ks'")
     if config.tuning.n_trials < 1 or config.tuning.timeout_seconds < 1:
         raise ModelConfigError("Tuning trial and timeout budgets must be positive")
+    if config.tuning.cv_strategy not in {"rolling", "stratified"}:
+        raise ModelConfigError("tuning.cv_strategy must be 'rolling' or 'stratified'")
     if config.tuning.cv_folds < 2:
         raise ModelConfigError("tuning.cv_folds must be at least 2")
+    if config.tuning.validation_months < 1 or config.tuning.gap_months < 0:
+        raise ModelConfigError("Tuning validation and gap month counts are invalid")
+    if config.tuning.min_train_months < 1:
+        raise ModelConfigError("tuning.min_train_months must be positive")
     if config.tuning.startup_trials < 0 or config.tuning.min_bad_samples_per_fold < 1:
         raise ModelConfigError("Tuning startup trials and minimum bad samples are invalid")
     if config.model.num_boost_round < 1 or config.model.early_stopping_rounds < 1:

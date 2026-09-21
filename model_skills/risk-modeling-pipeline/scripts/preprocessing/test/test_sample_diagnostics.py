@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 import unittest
 
 import polars as pl
 
-from data.contract import DataContract, DataContractError, validate_contract
+from data.contract import DataContract, validate_contract
 from preprocessing.sample_config import load_sample_config
 from preprocessing.sample_diagnostics import (
     apply_sample_treatment,
@@ -61,18 +60,10 @@ class SampleDiagnosticsTest(unittest.TestCase):
         self.assertEqual(report["metrics"]["missing_target_count"], 1)
 
     def test_applies_only_configured_treatments(self) -> None:
-        with self.assertRaises(DataContractError):
-            apply_sample_treatment(self.data, self.contract, self.config)
-
-        treatment = replace(
-            self.config.treatment,
-            missing_target_action="drop",
-            incomplete_latest_month_action="keep",
-        )
         result = apply_sample_treatment(
             self.data,
             self.contract,
-            replace(self.config, treatment=treatment),
+            self.config,
         )
 
         self.assertEqual(result.removed_missing_target_count, 1)

@@ -27,8 +27,8 @@ model_skills/
         │   │   │   └── run.py
         │   │   ├── model_config/        # model configuration node
         │   │   ├── training_tuning/     # training/tuning node
-        │   │   ├── model_review/        # model review node
-        │   │   └── report_delivery/     # report delivery node
+        │   │   ├── model_review/        # model review logic
+        │   │   └── report_delivery/     # legacy compatibility placeholder
         │   ├── runner.py                # compatibility batch orchestration
         │   ├── definition.py            # public node IDs and event mapping
         │   └── node_config.py           # per-node YAML loading/validation
@@ -46,11 +46,14 @@ user-workspace/
 ├── data.csv
 ├── configs/
 │   ├── data_contract.yaml
-│   └── node_configs/
+│   ├── node_configs/
 │       ├── data-read.yaml
 │       ├── eda-analysis.yaml
 │       ├── sample-diagnosis.yaml
 │       └── feature-processing.yaml
+│   └── approvals/                    # hash-bound user confirmations
+│       ├── data-read.approval.json
+│       └── ...
 └── outputs/
     └── run_001/
         ├── models/
@@ -69,7 +72,10 @@ its workflow and output contract:
 Workspace bootstrap copies only the selected node's template and required
 prerequisite templates. `data_contract.yaml` is the deliberate exception: it
 is a shared, user-confirmed contract consumed by every node, while node YAMLs
-hold stage-specific parameters and overrides.
+hold stage-specific parameters and overrides. Approval manifests are written
+to the sibling `configs/approvals/` directory; the engine only falls back to
+the old `configs/node_configs/*.approval.json` location when reading legacy
+workspaces.
 
 ```text
 workflow.__main__
@@ -83,12 +89,16 @@ workflow.__main__
     │                       └── EDA report + diagnostics
     ├── sample-diagnosis  → workflow.nodes.sample_diagnosis.run
     │                       ├── data-read.yaml (reload confirmed roles)
-    │                       ├── sample-diagnosis.yaml (thresholds + treatment policy)
-    │                       └── diagnostics + confirmed policy artifacts
+    │                       ├── sample_diagnosis.template.yaml (Skill defaults)
+    │                       └── diagnostics + summary artifacts (no confirmation gate)
     ├── feature-processing → workflow.nodes.feature_processing.run
     │                       ├── feature-processing.yaml (selection + type policies)
     │                       └── statistics + processed data after confirmation
     └── no node ID         → workflow.runner (batch/compatibility mode)
+
+`model-config` is the final modeling composite: after confirmation it runs
+training/tuning, model review, report generation and model export. The former
+`report-delivery` node is not exposed as a selectable workflow stage.
 ```
 
 Run one node from the repository root with:
@@ -119,9 +129,14 @@ legacy batch runner is still available without a node ID for `check`,
 `prepare`, `approve`, `eda`, `model` and `all`; it is not the preferred UI
 integration path for node-by-node execution.
 
-The first invocation of a configuration-gated node bootstraps missing files
-from `assets/` and returns `waiting_confirmation`. After the user reviews the
-YAML and confirmation summary, rerun the same node with `--confirm-config`.
+The first invocation of `data-read` bootstraps missing files from `assets/` and
+returns `waiting_confirmation` for field-role confirmation. EDA, sample
+diagnosis, feature processing and model-config use their current YAML/defaults
+and return result summaries with a result-confirmation gate; sample diagnosis
+uses defaults and does not expose a YAML form. `--confirm-config`
+remains available for backwards-compatible advanced runs; the user-facing
+workflow uses `--confirm-config` for `data-read` and `--confirm-result` for
+the later nodes.
 
 Data source resolution is deterministic: `--data` takes precedence, then
 `data.input_path` in the workspace contract (relative to that contract), and
@@ -164,7 +179,7 @@ calculation boundary to the current Polars engine:
 | Monthly KS/AUC/PSI/Lift | `8.月度区分度` |
 | Toad-compatible KS buckets and Lift | `9.KS十分位` |
 | Correlation analysis | `6.相关性分析` |
-| Reference charts | `1.EDA总览` dashboard and sheet-level conditional formatting/charts |
+| Reference charts | `reports/data_eda_report.html` offline dashboard plus `1.EDA总览` Excel dashboard |
 
 The old Pandas/OpenPyXL exporter is not imported directly: metric calculation
 is centralized in `eda/analytics.py`, Toad calls remain behind

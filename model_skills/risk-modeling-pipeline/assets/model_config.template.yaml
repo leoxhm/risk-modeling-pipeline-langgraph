@@ -1,5 +1,7 @@
 split:
+  strategy: time
   oot_months: 2
+  test_months: 2
   test_ratio: 0.2
   random_seed: 42
 
@@ -32,14 +34,60 @@ feature_selection:
 
 training:
   mode: tuning
+  acceptance_metric: ks
+  min_improvement: 0.0
 
 tuning:
+  method: llm                    # 默认 LLM；none：只跑 Baseline；optuna：只跑 Optuna（三选一）
   sampler: tpe
   objective_metric: ks
   n_trials: 50
   timeout_seconds: 900
+  # Optuna 内层验证：rolling 使用 Train 内的扩展时间窗口，避免随机折造成时间泄漏。
+  cv_strategy: rolling       # rolling | stratified（兼容旧版）
+  cv_folds: 3                # 使用最近的 3 个验证窗口
+  validation_months: 1       # 每个窗口验证几个月
+  gap_months: 0              # 训练与验证之间间隔几个月
+  min_train_months: 3        # 第一个窗口至少使用几个月训练数据
+  # LLM 方式从 Baseline 参数开始独立迭代，不会先运行 Optuna。
+  # api_key 可直接填写；为空时才回退到 api_key_env 环境变量。
+  # 明文密钥会写入确认快照，请勿将该配置提交到 Git。
+  llm:
+    enabled: true
+    max_rounds: 10
+    run_all_rounds: true
+    min_improvement: 0.002
+    # 默认执行完整 max_rounds；接受/拒绝只决定最终保留哪组参数，不影响后续轮次。
+    # OOT 只作最终验证和护栏，不作为直接优化目标。
+    stopping:
+      plateau_rounds: 10                # 连续多少轮没有形成可接受提升后停止；与 max_rounds 一致时最多尝试 10 轮
+      plateau_min_improvement: 0.001     # 小于该提升视为没有明显进步
+      target_tolerance: 0.01             # 接近目标的允许差距
+      targets:
+        validate_ks: 0.30
+        validate_auc: 0.75
+        oot_ks: 0.25
+        oot_auc: 0.70
+      guardrails:
+        max_train_validate_ks_gap: 0.10  # 防止明显过拟合
+        allow_gap_improvement: true       # gap 明显收窄且验证集仅小幅回落时允许保留
+        min_gap_reduction: 0.02           # Train-Validate KS gap 至少收窄 0.02
+        max_validate_ks_regression: 0.005 # gap 策略允许的 Validate KS 最大回落
+        max_oot_ks_regression: 0.01       # gap 策略允许的 OOT KS 最大回落
+        max_validate_oot_ks_drop: 0.08   # 防止时间外推明显退化
+        max_oot_degradation_vs_baseline: 0.03
+        min_oot_bad_count: 30            # OOT 坏样本不足时只提示，不作为硬门槛
+    model: null
+    base_url: null
+    api_key: null
+    api_key_env: LLM_TUNING_API_KEY
+    verify_ssl: true
+    ca_bundle: null
+    timeout_seconds: 180
+    request_retries: 2
+    max_consecutive_provider_errors: 3
+    retry_backoff_seconds: 2
   startup_trials: 10
-  cv_folds: 3
   random_seed: 42
   min_bad_samples_per_fold: 20
   auc_gap_penalty: 0.5

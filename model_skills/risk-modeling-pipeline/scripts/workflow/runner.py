@@ -40,6 +40,8 @@ REQUIRED_PROJECT_FILES = (
     "workflow/nodes/data_read/run.py",
     "workflow/nodes/sample_diagnosis/run.py",
     "workflow/nodes/eda_analysis/run.py",
+    "workflow/nodes/model_config/run.py",
+    "workflow/nodes/training_tuning/run.py",
     "progress.py",
 )
 
@@ -51,7 +53,6 @@ MAIN_NODE_ORDER = (
     "model-config",
     "training-tuning",
     "model-review",
-    "report-delivery",
 )
 
 
@@ -191,7 +192,11 @@ def main() -> int:
     else:
         effective_mode = "eda"
     project_root = args.project_root.expanduser().resolve()
+    # Accept both the canonical Skill root and the legacy nested
+    # ``.../risk-modeling-pipeline`` value emitted by older prompts.
     engine_root = args.engine_root.expanduser().resolve()
+    if engine_root.name == "risk-modeling-pipeline" and (engine_root / "scripts").is_dir():
+        engine_root = engine_root.parent
     status = _environment_status(engine_root)
     status["project_root"] = str(project_root)
     status["engine_root"] = str(engine_root)
@@ -206,7 +211,7 @@ def main() -> int:
 
     scripts_root = _scripts_root(engine_root)
     sys.path.insert(0, str(scripts_root))
-    from workflow.nodes.common import ensure_workspace_configs, resolve_engine_assets
+    from workflow.nodes.common import ensure_workspace_configs, normalize_engine_root, resolve_engine_assets
 
     assets_dir = resolve_engine_assets(args)
     ensure_workspace_configs(
@@ -494,7 +499,10 @@ def main() -> int:
         )
         and bool(eda_parameters.get("generate_report", True))
     )
-    generate_model_report = selected_steps is None or "report-delivery" in selected_step_set
+    # Model reports are part of the modeling composite and are always written
+    # whenever the model stage runs; report-delivery is no longer a selectable
+    # standalone node.
+    generate_model_report = run_model_stage
     if run_eda_stage:
         eda_result = run_eda(
             data,
@@ -531,6 +539,8 @@ def main() -> int:
         )
         if model_result.report_path.is_file():
             result["model_report"] = str(model_result.report_path)
+        if model_result.html_report_path and model_result.html_report_path.is_file():
+            result["model_report_html"] = str(model_result.html_report_path)
         result["selected_feature_count"] = len(model_result.selected_features)
         result["metrics"] = model_result.metrics.to_dicts()
         model_summary_path = model_result.output_dir / "model_summary.json"

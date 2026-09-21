@@ -16,6 +16,12 @@ class SampleConfigError(ValueError):
 class SampleDiagnosticThresholds:
     """Thresholds used only to classify deterministic sample findings."""
 
+    iv_weak_threshold: float
+    psi_warning_threshold: float
+    psi_stable_threshold: float
+    bad_rate_min: float
+    bad_rate_max: float
+    feature_quality_pass_ratio: float
     imbalance_warning_minority_rate: float
     imbalance_critical_minority_rate: float
     latest_month_min_volume_ratio: float
@@ -25,7 +31,7 @@ class SampleDiagnosticThresholds:
 
 @dataclass(frozen=True)
 class SampleTreatmentConfig:
-    """User-confirmed actions for a later preprocessing/modeling stage."""
+    """Actions available to a later preprocessing/modeling stage."""
 
     duplicate_action: str
     missing_target_action: str
@@ -63,10 +69,35 @@ def load_sample_config(path: str | Path) -> SampleConfig:
         # accepting the legacy top-level shape for batch compatibility.
         if isinstance(raw.get("parameters"), dict):
             raw = raw["parameters"]
+        # Early node-config versions placed treatment keys directly under
+        # ``parameters`` and omitted diagnostic thresholds. Upgrade that shape
+        # in memory so existing workspaces remain runnable after the safer
+        # non-blocking treatment defaults were introduced.
+        treatment_keys = {
+            "duplicate_action",
+            "missing_target_action",
+            "all_null_feature_action",
+            "high_missing_row_action",
+            "incomplete_latest_month_action",
+            "class_imbalance_action",
+        }
+        if "treatment" not in raw and treatment_keys.intersection(raw):
+            raw = {
+                "diagnostics": {},
+                "treatment": {key: raw[key] for key in treatment_keys if key in raw},
+            }
         diagnostics = _mapping(raw, "diagnostics")
         treatment = _mapping(raw, "treatment")
         config = SampleConfig(
             diagnostics=SampleDiagnosticThresholds(
+                iv_weak_threshold=float(diagnostics.get("iv_weak_threshold", 0.02)),
+                psi_warning_threshold=float(diagnostics.get("psi_warning_threshold", 0.25)),
+                psi_stable_threshold=float(diagnostics.get("psi_stable_threshold", 0.10)),
+                bad_rate_min=float(diagnostics.get("bad_rate_min", 0.01)),
+                bad_rate_max=float(diagnostics.get("bad_rate_max", 0.20)),
+                feature_quality_pass_ratio=float(
+                    diagnostics.get("feature_quality_pass_ratio", 0.80)
+                ),
                 imbalance_warning_minority_rate=float(
                     diagnostics.get("imbalance_warning_minority_rate", 0.10)
                 ),
@@ -84,9 +115,9 @@ def load_sample_config(path: str | Path) -> SampleConfig:
                 ),
             ),
             treatment=SampleTreatmentConfig(
-                duplicate_action=str(treatment.get("duplicate_action", "error")),
+                duplicate_action=str(treatment.get("duplicate_action", "keep_first")),
                 missing_target_action=str(
-                    treatment.get("missing_target_action", "error")
+                    treatment.get("missing_target_action", "drop")
                 ),
                 all_null_feature_action=str(
                     treatment.get("all_null_feature_action", "drop")
@@ -95,7 +126,7 @@ def load_sample_config(path: str | Path) -> SampleConfig:
                     treatment.get("high_missing_row_action", "keep")
                 ),
                 incomplete_latest_month_action=str(
-                    treatment.get("incomplete_latest_month_action", "error")
+                    treatment.get("incomplete_latest_month_action", "exclude")
                 ),
                 class_imbalance_action=str(
                     treatment.get("class_imbalance_action", "class_weight")

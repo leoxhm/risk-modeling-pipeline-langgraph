@@ -55,7 +55,12 @@ class AiWorkflowIntegrationTest(unittest.TestCase):
             self.assertTrue(Path(request["review_artifacts"]["feature_selection"]).is_file())
             self.assertTrue(Path(request["review_artifacts"]["model_config_proposal"]).is_file())
         self.assertEqual(request["status"], "awaiting_user_confirmation")
-        self.assertIn("LATEST_MONTH_INCOMPLETE", request["blocker_codes"])
+        # Latest-month incompleteness is an advisory warning; it must remain
+        # visible without blocking the workflow.
+        self.assertIn(
+            "LATEST_MONTH_INCOMPLETE",
+            {item["code"] for item in request["sample_findings"]},
+        )
         self.assertIn("OOT_BAD_COUNT_CRITICAL", request["blocker_codes"])
         self.assertIn(
             "CLASS_IMBALANCE_WARNING",

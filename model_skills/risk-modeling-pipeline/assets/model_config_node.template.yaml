@@ -1,4 +1,87 @@
 node_id: model-config
 version: 1
 parameters:
-  config_path: configs/model_config.yaml
+  # 这里只保留需要建模人员确认的核心决策。特征预处理/筛选已在
+  # feature-processing 节点确认，LightGBM 和 Optuna 的高级参数使用安全默认值。
+
+  # 样本异常的处理方式；只会在确认后应用到训练流程。
+  sample_treatment:
+    duplicate_action: keep_first       # 重复主键：keep_first | keep_last | error
+    missing_target_action: drop        # 缺失标签：drop | error
+    all_null_feature_action: drop      # 全空特征：drop | error
+    high_missing_row_action: keep      # 高缺失样本：keep | drop
+    incomplete_latest_month_action: exclude # 不完整最新月：exclude | keep
+    class_imbalance_action: class_weight    # 类别不平衡：none | class_weight
+
+  # 时间切分方式。OOT 使用最近的若干完整月份，不能用于调参。
+  split:
+    strategy: time         # time：按连续月份；random_stratified：仅兼容旧版随机切分
+    oot_months: 2       # OOT 保留最近几个月；通常 1~3
+    test_months: 2      # OOT 之前最近几个月作为 Test；通常 1~3
+    test_ratio: 0.2      # 仅 random_stratified 模式使用，time 模式忽略
+    random_seed: 42     # 固定随机种子，保证结果可复现
+
+  # 训练和调参的总开关，以及调参模型替换基线模型的条件。
+  training:
+    mode: tuning             # 兼容旧配置；实际调参方式由 tuning.method 控制
+    acceptance_metric: ks    # 用 ks 或 auc 判断是否接受调参模型
+    min_improvement: 0.0     # 最低提升值；不满足时保留 Baseline
+
+  # 调参预算。搜索空间和惩罚项由引擎采用安全默认值，不需要日常修改。
+  tuning:
+    method: llm           # 默认 LLM；none | optuna | llm，三种调参方式互斥，只执行一种
+    sampler: tpe            # 当前支持 Optuna TPE
+    objective_metric: ks    # auc | ks
+    n_trials: 50            # 最大试验轮数
+    timeout_seconds: 900    # 最大调参时间（秒）
+    cv_strategy: rolling    # rolling：按月份扩展窗口；stratified：兼容旧版随机折
+    cv_folds: 3             # 使用最近的几个验证窗口
+    validation_months: 1    # 每个验证窗口包含的月份数
+    gap_months: 0           # 训练与验证之间的月份间隔
+    min_train_months: 3     # 第一个窗口至少使用的训练月份数
+    # 仅当 method=llm 时启用；LLM 从 Baseline 参数开始独立迭代，不会先运行 Optuna。
+    llm:
+      enabled: true        # 默认调用 OpenAI-compatible 服务；未配置服务时安全跳过
+      max_rounds: 10        # 最多迭代轮数
+      run_all_rounds: true  # 是否完整执行 max_rounds；true 时不因指标未提升/平台期提前停止
+      min_improvement: 0.002 # Validate KS 每轮至少提升 0.002 才接受；允许小步优化
+      # OOT 只作最终验证和护栏，不作为 LLM 直接优化目标。
+      stopping:
+        plateau_rounds: 10                # 连续无明显提升的轮数；与 max_rounds 一致时最多尝试 10 轮
+        plateau_min_improvement: 0.001     # 小于该提升视为无明显进步
+        target_tolerance: 0.01             # 接近目标的允许差距
+        targets:
+          validate_ks: 0.30
+          validate_auc: 0.75
+          oot_ks: 0.25
+          oot_auc: 0.70
+        guardrails:
+          max_train_validate_ks_gap: 0.10
+          allow_gap_improvement: true      # gap 明显收窄且验证集仅小幅回落时允许保留
+          min_gap_reduction: 0.02          # Train-Validate KS gap 至少收窄 0.02
+          max_validate_ks_regression: 0.005 # gap 策略允许的 Validate KS 最大回落
+          max_oot_ks_regression: 0.01      # gap 策略允许的 OOT KS 最大回落
+          max_validate_oot_ks_drop: 0.08
+          max_oot_degradation_vs_baseline: 0.03
+          min_oot_bad_count: 30            # 坏样本不足时 OOT 仅提示
+      model: qwen3.8-flash           # 例如 qwen3.5-flash；为空时读取 LLM_TUNING_MODEL
+      base_url: https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1        # 例如 https://.../v1；为空时读取 LLM_TUNING_BASE_URL
+      api_key: sk-sp-H.DLLMXI.K9wF.MEQCIDyJVbppWADkmPHGibifDVPlhY2k6yWnxA8MJU8zx15SAiA7oTAIxC_Q_AL5zJG9IT2SDZgXr8CRwzvqPqIFBTvVcA          # 可直接填写 API Key；留空时读取 api_key_env（明文仅限本地测试）
+      api_key_env: LLM_TUNING_API_KEY # api_key 为空时使用的环境变量名
+      verify_ssl: true       # 默认校验证书；内网 CA 不在系统信任库时配置 ca_bundle
+      ca_bundle: null        # CA PEM 文件路径，例如 /etc/ssl/certs/internal-ca.pem
+      timeout_seconds: 180      # 单次请求超时；大模型偶发慢响应时建议 120~180 秒
+      request_retries: 2        # 单轮失败后的额外重试次数
+      max_consecutive_provider_errors: 3 # 连续失败达到此次数才终止 LLM 调参
+      retry_backoff_seconds: 2  # 重试等待秒数，按次数递增
+
+  # 只暴露最影响模型复杂度和训练速度的参数；其余参数使用默认值。
+  model:
+    learning_rate: 0.03          # 学习率，越小越稳但训练更慢
+    num_leaves: 31               # 单棵树最大叶子数，越大越容易过拟合
+    max_depth: -1                # 树最大深度；-1 表示不限制
+    min_data_in_leaf: 30         # 叶节点最小样本数，越大越保守
+    early_stopping_rounds: 100   # 连续多少轮无提升后提前停止
+
+  # 高级参数说明：LightGBM objective/metric、特征采样、正则化和 search_space
+  # 使用引擎安全默认值；上面的时间 CV 参数可按数据跨度调整。

@@ -9,7 +9,7 @@ from typing import Any
 
 import polars as pl
 
-from data.contract import DataContract, DataContractError
+from data.contract import DataContract
 
 from .sample_config import SampleConfig
 
@@ -29,12 +29,15 @@ class SampleFinding:
 
 
 def _report_status(findings: list[SampleFinding]) -> str:
-    severities = {finding.severity for finding in findings}
-    if "blocker" in severities:
-        return "blocked"
-    if "warning" in severities:
-        return "needs_review"
-    return "ready"
+    """Return an advisory status without gating later workflow stages.
+
+    Sample diagnosis is an evidence/confirmation step.  Findings are useful
+    warnings, but they must not turn into a workflow blocker: the user may
+    choose to continue and let the later preprocessing/model configuration
+    apply the confirmed policy.  Keep the old ``blocker`` severity readable
+    for backward-compatible artifacts, while exposing a non-blocking status.
+    """
+    return "needs_review" if findings else "ready"
 
 
 @dataclass(frozen=True)
@@ -253,13 +256,10 @@ def build_sample_diagnostics(
 
     findings: list[SampleFinding] = []
     if missing_target_count:
-        severity = (
-            "blocker" if treatment.missing_target_action == "error" else "warning"
-        )
         findings.append(
             SampleFinding(
                 "MISSING_TARGET",
-                severity,
+                "warning",
                 "存在缺失标签样本。",
                 {
                     "count": missing_target_count,
@@ -272,31 +272,27 @@ def build_sample_diagnostics(
         findings.append(
             SampleFinding(
                 "INVALID_TARGET_VALUES",
-                "blocker",
+                "warning",
                 "目标字段包含好坏标签映射之外的取值。",
                 {"count": invalid_target_count},
-                "修正标签口径或更新标签映射后重新准备，不允许自动改写标签。",
+                "修正标签口径或更新标签映射；本节点仅告警，不自动改写标签，也不阻止后续节点执行。",
             )
         )
     if duplicate_metrics["duplicate_key_count"]:
-        severity = "blocker" if treatment.duplicate_action == "error" else "warning"
         findings.append(
             SampleFinding(
                 "DUPLICATE_ID",
-                severity,
+                "warning",
                 "配置的主键存在重复记录。",
                 duplicate_metrics,
-                "确认重复记录的业务含义及保留第一条、最后一条或直接阻断。",
+                "确认重复记录的业务含义及保留第一条或最后一条，并在报告中记录删除数量。",
             )
         )
     if all_null_features:
-        severity = (
-            "blocker" if treatment.all_null_feature_action == "error" else "warning"
-        )
         findings.append(
             SampleFinding(
                 "ALL_NULL_FEATURES",
-                severity,
+                "warning",
                 "存在全空候选特征。",
                 {"columns": all_null_features},
                 "确认删除全空特征，并检查上游取数逻辑。",
@@ -317,15 +313,14 @@ def build_sample_diagnostics(
             )
         )
     if labeled_count and minority_rate < thresholds.imbalance_warning_minority_rate:
-        severity = (
-            "blocker"
-            if minority_rate < thresholds.imbalance_critical_minority_rate
-            else "warning"
-        )
+        # Even an extremely small minority class is advisory at this stage.
+        # The critical threshold remains in the evidence so the modeling
+        # configuration can make an explicit, user-approved choice later.
+        severity = "warning"
         findings.append(
             SampleFinding(
                 "CLASS_IMBALANCE_CRITICAL"
-                if severity == "blocker"
+                if minority_rate < thresholds.imbalance_critical_minority_rate
                 else "CLASS_IMBALANCE_WARNING",
                 severity,
                 "正负样本分布不均衡。",
@@ -334,8 +329,10 @@ def build_sample_diagnostics(
                     "bad_count": bad_count,
                     "minority_rate": minority_rate,
                     "majority_to_minority_ratio": imbalance_ratio,
+                    "critical_threshold": thresholds.imbalance_critical_minority_rate,
+                    "critical_threshold_breached": minority_rate < thresholds.imbalance_critical_minority_rate,
                 },
-                "优先考虑仅在 Train 上使用类别权重；不要改变 Test/OOT 的自然分布。",
+                "后续模型配置阶段确认是否仅在 Train 上使用类别权重；不要改变 Test/OOT 的自然分布。",
             )
         )
     if missing_months:
@@ -366,9 +363,7 @@ def build_sample_diagnostics(
         findings.append(
             SampleFinding(
                 "LATEST_MONTH_INCOMPLETE",
-                "blocker"
-                if treatment.incomplete_latest_month_action == "error"
-                else "warning",
+                "warning",
                 "最新月样本量明显低于近期水平，疑似数据未完整。",
                 latest_evidence,
                 "确认数据截止日期，或明确选择保留/排除最新月份。",
@@ -414,21 +409,16 @@ def apply_sample_treatment(
     features = _candidate_features(result, contract)
 
     missing_target_count = result.get_column(contract.target_col).null_count()
-    if missing_target_count and treatment.missing_target_action == "error":
-        raise DataContractError(
-            f"Found {missing_target_count} rows with missing target values"
-        )
     if missing_target_count:
         result = result.filter(pl.col(contract.target_col).is_not_null())
 
     duplicate_metrics = _duplicate_metrics(result, contract.id_cols)
     duplicate_excess = duplicate_metrics["duplicate_excess_row_count"]
-    if duplicate_excess and treatment.duplicate_action == "error":
-        raise DataContractError(
-            f"Found {duplicate_metrics['duplicate_key_count']} duplicate ID groups"
-        )
     if duplicate_excess:
-        keep = "first" if treatment.duplicate_action == "keep_first" else "last"
+        # ``error`` is accepted only as a legacy alias. New templates use an
+        # explicit deterministic keep action so data issues do not abort an
+        # interactive run.
+        keep = "first" if treatment.duplicate_action != "keep_last" else "last"
         result = result.unique(
             subset=list(contract.id_cols), keep=keep, maintain_order=True
         )
@@ -438,10 +428,6 @@ def apply_sample_treatment(
         for column in features
         if result.get_column(column).null_count() == result.height
     )
-    if all_null_features and treatment.all_null_feature_action == "error":
-        raise DataContractError(
-            f"All-null candidate features require review: {list(all_null_features)}"
-        )
     if all_null_features:
         result = result.drop(list(all_null_features))
     retained_features = [
@@ -466,11 +452,8 @@ def apply_sample_treatment(
         monthly, config.diagnostics.latest_month_min_volume_ratio
     )
     removed_incomplete_month_count = 0
-    if incomplete and treatment.incomplete_latest_month_action == "error":
-        raise DataContractError(
-            f"Latest month {evidence['latest_month']} appears incomplete; change the confirmed treatment"
-        )
-    if incomplete and treatment.incomplete_latest_month_action == "exclude":
+    # ``error`` remains a legacy alias for the safe default ``exclude``.
+    if incomplete and treatment.incomplete_latest_month_action != "keep":
         parsed_month = _date_expression(contract.date_col).dt.strftime("%Y%m")
         original_count = result.height
         result = result.filter(

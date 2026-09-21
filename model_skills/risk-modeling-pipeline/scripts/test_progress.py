@@ -24,6 +24,12 @@ class ProgressReporterTest(unittest.TestCase):
                 summary="完成字段画像",
                 artifacts=[artifact],
                 duration_ms=125,
+                experiment={
+                    "kind": "optuna",
+                    "trial": 1,
+                    "total_trials": 10,
+                    "parameters": {"learning_rate": 0.03},
+                },
             )
 
             events = [
@@ -44,6 +50,8 @@ class ProgressReporterTest(unittest.TestCase):
         self.assertEqual(marker["main_node_id"], "eda-analysis")
         self.assertEqual(marker["artifacts"], [str(artifact.resolve())])
         self.assertEqual(marker["duration_ms"], 125)
+        self.assertEqual(marker["experiment"]["trial"], 1)
+        self.assertEqual(state["nodes"]["profiler"]["experiment"]["kind"], "optuna")
 
     def test_track_records_failure_and_reraises(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -44,6 +44,13 @@ class EdaAnalyticsIntegrationTest(unittest.TestCase):
         self.assertEqual(analysis.correlation_pairs.height, 171)
         self.assertEqual(analysis.monthly_discrimination.height, 19 * 10)
         self.assertGreaterEqual(analysis.ks_bucket.height, 19 * 2)
+        self.assertIn("mean", analysis.univariate_overview.columns)
+        self.assertIn("std", analysis.univariate_overview.columns)
+        self.assertIn("psi", analysis.monthly_sample.columns)
+        self.assertIn("cumulative_iv", analysis.binning_detail.columns)
+        self.assertIn("cumulative_ks", analysis.binning_detail.columns)
+        self.assertEqual(analysis.psi_summary.height, 19)
+        self.assertEqual(analysis.correlation_matrix.height, 19)
 
 
 if __name__ == "__main__":

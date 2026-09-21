@@ -1,5 +1,7 @@
 split:
+  strategy: time
   oot_months: 2
+  test_months: 2
   test_ratio: 0.2
   random_seed: 42
 
@@ -38,8 +40,12 @@ tuning:
   objective_metric: ks
   n_trials: 50
   timeout_seconds: 900
-  startup_trials: 10
+  cv_strategy: rolling
   cv_folds: 3
+  validation_months: 1
+  gap_months: 0
+  min_train_months: 3
+  startup_trials: 10
   random_seed: 42
   min_bad_samples_per_fold: 20
   auc_gap_penalty: 0.5

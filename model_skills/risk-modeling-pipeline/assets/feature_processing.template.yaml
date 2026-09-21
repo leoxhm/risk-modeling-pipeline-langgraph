@@ -52,3 +52,16 @@ parameters:
   output:
     # 确认后输出处理后的 Parquet 和审计清单。
     write_processed_data: true
+
+  # 可选的大模型参数建议。建议只传字段级统计（缺失率、IV、KS、PSI、相关性），
+  # 不传原始样本；建议草案会单独写入 outputs/feature-processing/。
+  llm:
+    enabled: false
+    model: null
+    base_url: null
+    api_key: null
+    api_key_env: LLM_TUNING_API_KEY
+    temperature: 0.0
+    timeout_seconds: 60
+    verify_ssl: true
+    ca_bundle: null

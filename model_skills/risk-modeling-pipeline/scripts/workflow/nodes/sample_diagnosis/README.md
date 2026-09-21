@@ -4,17 +4,18 @@ This is the third user-facing stage, after the confirmed `data-read` and
 `eda-analysis` nodes. It is deliberately independent from EDA and reloads the
 source data in a fresh process.
 
-The first invocation reads `configs/node_configs/sample-diagnosis.yaml`,
+The node loads the Skill's default `sample_diagnosis.template.yaml`,
 calculates class balance, monthly continuity/bad-rate changes, duplicate IDs,
 missing/invalid labels, row missingness and latest-month completeness, then
-writes `sample_diagnostics.json` and waits for confirmation. It does not split
-data, apply `class_weight` or train a model.
+writes `sample_diagnostics.json`, `modeling_risk_summary.json`,
+`sample_diagnosis_manifest.json` and a short `node_summary.json`. It also
+returns one modeling-risk table covering IV/PSI pass ratios, bad-rate range,
+missingness, imbalance and time integrity, with the threshold explained in
+every row. All findings are advisory warnings; they do not block a later
+selected node. The node does not wait for YAML confirmation, split data,
+apply `class_weight` or train a model.
 
-After the user confirms the single `sample-diagnosis.yaml`, rerun with
-`--confirm-config`. The node writes `sample_treatment_policy.json` and records
-the configured duplicate, missing-target, all-null-feature, high-missing-row
-and incomplete-month actions in the manifest and approval artifact. It never
-modifies or saves treated data; later feature-processing/modeling nodes apply
-the policy.
-The selected class-imbalance action is recorded as a hint for the later
-training node rather than applied here.
+`configs/node_configs/sample-diagnosis.yaml` may still be copied into the
+workspace for transparency and backward compatibility, but edits to it are not
+used by this diagnostic run. Sample-treatment choices are confirmed later in
+the model configuration stage and are not applied here.

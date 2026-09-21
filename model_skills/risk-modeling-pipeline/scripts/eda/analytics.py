@@ -35,6 +35,8 @@ class EdaAnalysisResult:
     monthly_sample: pl.DataFrame
     monthly_psi: pl.DataFrame
     correlation_pairs: pl.DataFrame
+    correlation_matrix: pl.DataFrame
+    psi_summary: pl.DataFrame
     monthly_discrimination: pl.DataFrame
     ks_bucket: pl.DataFrame
 
@@ -54,9 +56,41 @@ def _quantile_edges(values: list[float], bin_count: int) -> list[float]:
     return sorted(edges)
 
 
-def _numeric_binner(values: Iterable[Any], bin_count: int) -> tuple[dict[Any, int], list[str]]:
-    numeric_values = [float(value) for value in values if value is not None]
+def _numeric_binner(
+    values: Iterable[Any],
+    bin_count: int,
+    *,
+    targets: Iterable[int] | None = None,
+    binning_method: str = "quantile",
+) -> tuple[dict[Any, int], list[str]]:
+    raw_values = list(values)
+    numeric_values = [float(value) for value in raw_values if value is not None]
     edges = _quantile_edges(numeric_values, bin_count)
+    if binning_method == "chi" and targets is not None and numeric_values:
+        try:
+            import pandas as pd
+            from toad.transform import Combiner
+
+            combiner = Combiner()
+            combiner.fit(
+                pd.Series(raw_values, name="feature"),
+                pd.Series(list(targets)),
+                method="chi",
+                n_bins=bin_count,
+                min_samples=0.01,
+                empty_separate=True,
+            )
+            candidate_edges = combiner.rules.get("feature")
+            if candidate_edges is not None:
+                edges = sorted(
+                    float(edge)
+                    for edge in candidate_edges
+                    if edge is not None and math.isfinite(float(edge))
+                )
+        except (ImportError, TypeError, ValueError, KeyError):
+            # Quantile bins remain the deterministic fallback when Toad's
+            # optional chi-square combiner cannot handle a column.
+            pass
     labels: list[str] = []
     for index, edge in enumerate(edges):
         left = "-inf" if index == 0 else f"{edges[index - 1]:.6g}"
@@ -107,13 +141,19 @@ def _bin_feature(
     bin_count: int,
     max_categories: int,
     metrics_backend: str,
+    binning_method: str,
 ) -> tuple[list[dict[str, Any]], dict[str, float | int | None], dict[Any, int], list[str]]:
     series = data.get_column(feature)
     targets = data.get_column(target_col).to_list()
     raw_values = series.to_list()
     numeric = _is_numeric(series)
     if numeric:
-        mapping, labels = _numeric_binner(raw_values, bin_count)
+        mapping, labels = _numeric_binner(
+            raw_values,
+            bin_count,
+            targets=targets,
+            binning_method=binning_method if metrics_backend == "toad" else "quantile",
+        )
     else:
         mapping, labels = _categorical_binner(raw_values, max_categories)
 
@@ -204,7 +244,9 @@ def _bin_feature(
                 "good_distribution": good_count / total_good if total_good else 0.0,
                 "woe": woe,
                 "iv_bin": iv_value,
+                "cumulative_iv": iv_total,
                 "ks": ks_value,
+                "cumulative_ks": ks_max,
             }
         )
 
@@ -587,6 +629,33 @@ def _correlation_pairs(
     return sorted(rows, key=lambda row: row["abs_correlation"], reverse=True)
 
 
+def _correlation_matrix(
+    data: pl.DataFrame,
+    features: tuple[str, ...],
+    method: str,
+) -> pl.DataFrame:
+    """Return a square numeric-feature correlation matrix for heatmap reports."""
+    numeric_features = [feature for feature in features if _is_numeric(data.get_column(feature))]
+    rows: list[dict[str, Any]] = []
+    for left in numeric_features:
+        row: dict[str, Any] = {"feature": left}
+        for right in numeric_features:
+            pairs = [
+                (float(x), float(y))
+                for x, y in zip(data.get_column(left).to_list(), data.get_column(right).to_list())
+                if x is not None and y is not None
+            ]
+            if len(pairs) < 2:
+                row[right] = None
+                continue
+            x_values, y_values = zip(*pairs)
+            if method == "spearman":
+                x_values, y_values = _ranks(x_values), _ranks(y_values)
+            row[right] = 1.0 if left == right else _pearson(x_values, y_values)
+        rows.append(row)
+    return pl.DataFrame(rows) if rows else pl.DataFrame({"feature": []})
+
+
 def build_eda_analysis(
     data: pl.DataFrame,
     contract: ValidatedDataContract,
@@ -599,6 +668,7 @@ def build_eda_analysis(
     max_categories: int = 20,
     correlation_method: str = "pearson",
     metrics_backend: str = "toad",
+    binning_method: str = "quantile",
 ) -> EdaAnalysisResult:
     """Build detailed feature, stability, and correlation EDA tables."""
     if correlation_method not in {"pearson", "spearman"}:
@@ -606,6 +676,8 @@ def build_eda_analysis(
     if month_col not in data.columns:
         raise ValueError(f"EDA requires month column '{month_col}'")
     metrics_backend = resolve_backend(metrics_backend)
+    if binning_method not in {"quantile", "chi"}:
+        raise ValueError("binning_method must be 'quantile' or 'chi'")
     if ks_method not in {"quantile", "step"}:
         raise ValueError("ks_method must be 'quantile' or 'step'")
     ks_bucket = int(ks_bucket or bin_count)
@@ -630,6 +702,10 @@ def build_eda_analysis(
     else:
         baseline_month = str(baseline_month)
     for feature in contract.feature_cols:
+        feature_series = data.get_column(feature)
+        is_numeric_feature = _is_numeric(feature_series)
+        feature_mean = feature_series.mean() if is_numeric_feature else None
+        feature_std = feature_series.std() if is_numeric_feature else None
         feature_details, metrics, mapping, labels = _bin_feature(
             data,
             feature,
@@ -637,9 +713,19 @@ def build_eda_analysis(
             bin_count=bin_count,
             max_categories=max_categories,
             metrics_backend=metrics_backend,
+            binning_method=binning_method,
         )
         details.extend(feature_details)
-        overview_rows.append({"feature": feature, "metrics_backend": metrics_backend, **metrics})
+        overview_rows.append(
+            {
+                "feature": feature,
+                "variable_type": str(feature_series.dtype),
+                "mean": float(feature_mean) if feature_mean is not None else None,
+                "std": float(feature_std) if feature_std is not None else None,
+                "metrics_backend": metrics_backend,
+                **metrics,
+            }
+        )
         psi_rows.extend(
             _feature_psi(
                 data,
@@ -690,14 +776,57 @@ def build_eda_analysis(
         )
         .sort(month_col)
     )
+    # A monthly sample PSI compares the good/bad composition of each month to
+    # the selected baseline month.  This is distinct from feature PSI, which
+    # compares each variable's value distribution.
+    monthly_sample_rows = monthly_sample.to_dicts()
+    baseline_sample = next(
+        (row for row in monthly_sample_rows if str(row[month_col]) == str(baseline_month)),
+        None,
+    )
+    baseline_labels = (
+        [0] * int(baseline_sample.get("good_count", 0))
+        + [1] * int(baseline_sample.get("bad_count", 0))
+        if baseline_sample
+        else []
+    )
+    enriched_monthly: list[dict[str, Any]] = []
+    for row in monthly_sample_rows:
+        current_labels = [0] * int(row.get("good_count", 0)) + [1] * int(row.get("bad_count", 0))
+        if str(row[month_col]) == str(baseline_month):
+            sample_psi = 0.0
+        elif metrics_backend == "toad" and current_labels and baseline_labels:
+            sample_psi = float(toad_psi(current_labels, baseline_labels, support=[0, 1]) or 0.0)
+        else:
+            current_total = len(current_labels)
+            base_total = len(baseline_labels)
+            sample_psi = 0.0
+            for label in (0, 1):
+                base_share = (baseline_labels.count(label) + _EPSILON) / (base_total + 2 * _EPSILON)
+                current_share = (current_labels.count(label) + _EPSILON) / (current_total + 2 * _EPSILON)
+                sample_psi += (current_share - base_share) * math.log(current_share / base_share)
+        enriched_monthly.append({**row, "baseline_month": baseline_month, "psi": sample_psi})
+    monthly_sample = pl.DataFrame(enriched_monthly)
+    monthly_psi = pl.DataFrame(psi_rows).sort(["feature", "event_month"])
+    psi_summary = (
+        monthly_psi.group_by("feature")
+        .agg(
+            pl.col("psi").mean().alias("average_psi"),
+            pl.col("psi").max().alias("max_psi"),
+        )
+        .sort("max_psi", descending=True)
+        if monthly_psi.height
+        else pl.DataFrame({"feature": [], "average_psi": [], "max_psi": []})
+    )
+    correlation_pairs = pl.DataFrame(_correlation_pairs(data, contract.feature_cols, correlation_method))
     result = EdaAnalysisResult(
         univariate_overview=pl.DataFrame(overview_rows).sort("iv", descending=True),
         binning_detail=pl.DataFrame(details),
         monthly_sample=monthly_sample,
-        monthly_psi=pl.DataFrame(psi_rows).sort(["feature", "event_month"]),
-        correlation_pairs=pl.DataFrame(
-            _correlation_pairs(data, contract.feature_cols, correlation_method)
-        ),
+        monthly_psi=monthly_psi,
+        correlation_pairs=correlation_pairs,
+        correlation_matrix=_correlation_matrix(data, contract.feature_cols, correlation_method),
+        psi_summary=psi_summary,
         monthly_discrimination=pl.DataFrame(monthly_discrimination_rows),
         ks_bucket=pl.DataFrame(ks_bucket_rows),
     )

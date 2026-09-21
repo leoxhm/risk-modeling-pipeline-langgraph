@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import sys
 from time import perf_counter
-from typing import IO, Any, Iterator, Sequence
+from typing import IO, Any, Iterator, Mapping, Sequence
 from uuid import uuid4
 
 from workflow import MAIN_NODE_IDS, main_node_for
@@ -29,6 +29,9 @@ INTERNAL_NODE_IDS = {
     "eda",
     "feature-selection",
     "tuning",
+    # Internal post-Optuna LLM refinement; mapped to the user-facing
+    # model-config/training stage by workflow.definition.
+    "llm-tuning",
     "training",
     "review",
     "eda-report",
@@ -95,6 +98,7 @@ class ProgressReporter:
         summary: str | None = None,
         artifacts: Sequence[str | Path] = (),
         duration_ms: int | None = None,
+        experiment: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         if node_id not in NODE_IDS:
             raise ValueError(f"Unknown modeling node: {node_id}")
@@ -113,10 +117,12 @@ class ProgressReporter:
             "artifacts": [str(Path(path).expanduser().resolve()) for path in artifacts],
             "duration_ms": duration_ms,
         }
+        if experiment is not None:
+            event["experiment"] = dict(experiment)
         with self.events_path.open("a", encoding="utf-8") as event_file:
             event_file.write(json.dumps(event, ensure_ascii=False) + "\n")
         self._state["updated_at"] = timestamp
-        self._state["nodes"][node_id] = {
+        node_state = {
             "status": status,
             "main_node_id": event["main_node_id"],
             "summary": summary,
@@ -125,6 +131,11 @@ class ProgressReporter:
             "duration_ms": duration_ms,
             "event_id": event["event_id"],
         }
+        if experiment is not None:
+            node_state["experiment"] = dict(experiment)
+        elif node_id in self._state["nodes"] and "experiment" in self._state["nodes"][node_id]:
+            node_state["experiment"] = self._state["nodes"][node_id]["experiment"]
+        self._state["nodes"][node_id] = node_state
         temporary_path = self.state_path.with_suffix(".json.tmp")
         temporary_path.write_text(json.dumps(self._state, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary_path.replace(self.state_path)

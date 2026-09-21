@@ -42,9 +42,14 @@ def build_experiment_plan(
         "recommended_training_mode": recommended_training_mode,
         "blocker_codes": blocker_codes,
         "validation": {
+            "split_strategy": model_config.split.strategy,
             "oot_months": model_config.split.oot_months,
+            "test_months": model_config.split.test_months,
             "test_ratio": model_config.split.test_ratio,
             "tuning_cv_folds": model_config.tuning.cv_folds,
+            "tuning_cv_strategy": model_config.tuning.cv_strategy,
+            "validation_months": model_config.tuning.validation_months,
+            "gap_months": model_config.tuning.gap_months,
             "oot_usage": "final_validation_only",
         },
         "tuning": {
@@ -52,7 +57,11 @@ def build_experiment_plan(
             "sampler": model_config.tuning.sampler,
             "n_trials": model_config.tuning.n_trials,
             "timeout_seconds": model_config.tuning.timeout_seconds,
-            "selection_metric": "penalized_mean_cv_auc",
+            "cv_strategy": model_config.tuning.cv_strategy,
+            "cv_folds": model_config.tuning.cv_folds,
+            "validation_months": model_config.tuning.validation_months,
+            "gap_months": model_config.tuning.gap_months,
+            "selection_metric": f"penalized_mean_cv_{model_config.tuning.objective_metric}",
         },
         "feature_policy": {
             "preprocessing": asdict(model_config.feature_preprocessing),

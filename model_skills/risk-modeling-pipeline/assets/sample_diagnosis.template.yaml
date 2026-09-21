@@ -9,9 +9,22 @@ parameters:
 
   # 诊断阈值：只用于生成风险提示，不会自动改变数据。
   diagnostics:
+    # 以下三个阈值会用于“建模风险提示表”。它们是通用风控经验值，
+    # 不是业务准入门槛；如有业务口径，应在模型配置阶段覆盖。
+    # IV 小于此值通常认为单变量区分度不足。
+    iv_weak_threshold: 0.02
+    # PSI 小于 0.25 视为尚未达到显著漂移；0.10 以内为稳定区间。
+    psi_warning_threshold: 0.25
+    psi_stable_threshold: 0.10
+    # 通用坏样本率检查区间，仅用于提示样本是否过低/过高。
+    bad_rate_min: 0.01
+    bad_rate_max: 0.20
+    # IV/PSI/缺失率达到阈值的特征占比，低于此值提示整体特征质量不足。
+    feature_quality_pass_ratio: 0.80
     # 少数类占比低于此值时提示类别不平衡。
     imbalance_warning_minority_rate: 0.10
-    # 少数类占比低于此值时升级为严重告警。
+    # 少数类占比低于此值时在证据中标记 critical_threshold_breached=true；
+    # 仍然只产生 warning，不阻断后续节点。
     imbalance_critical_minority_rate: 0.01
     # 最新月份样本量低于近期月中位数乘此比例时提示月份不完整。
     latest_month_min_volume_ratio: 0.50
@@ -20,19 +33,34 @@ parameters:
     # 单行缺失率达到此值时提示高缺失样本。
     high_missing_row_rate: 0.80
 
-  # 样本处理策略：只记录用户选择，后续特征预处理/训练节点负责执行。
-  # 可选值请直接按注释填写；选择 error 表示发现问题时阻断后续节点。
+  # 兼容旧版本的样本处理策略记录。当前 sample-diagnosis 节点不会读取或确认
+  # 这些动作；实际样本处理和类别不平衡策略在 model-config 节点确认。
+  # 可选值请直接按注释填写；发现问题会保留诊断告警并按所选动作处理，
+  # 不会因为样本问题直接中断训练。
   treatment:
-    # 重复主键：error | keep_first | keep_last
-    duplicate_action: error
-    # 缺失目标标签：error | drop
-    missing_target_action: error
-    # 全空特征列：drop | error
+    # 重复主键：keep_first | keep_last
+    duplicate_action: keep_first
+    # 缺失目标标签：drop
+    missing_target_action: drop
+    # 全空特征列：drop
     all_null_feature_action: drop
     # 单行高缺失样本：keep | drop
     high_missing_row_action: keep
-    # 最新不完整月份：error | exclude | keep
-    incomplete_latest_month_action: error
+    # 最新不完整月份：exclude | keep
+    incomplete_latest_month_action: exclude
     # 类别不平衡：none | class_weight
     # class_weight 只作为训练参数提示，不在本节点执行。
     class_imbalance_action: class_weight
+
+  # 可选的大模型参数建议。只使用聚合后的 EDA/诊断指标，不上传原始数据。
+  # enabled=false 时节点仍按当前 YAML 正常运行，不依赖外部服务。
+  llm:
+    enabled: false
+    model: null
+    base_url: null
+    api_key: null
+    api_key_env: LLM_TUNING_API_KEY
+    temperature: 0.0
+    timeout_seconds: 60
+    verify_ssl: true
+    ca_bundle: null

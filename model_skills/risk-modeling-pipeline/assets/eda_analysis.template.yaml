@@ -10,7 +10,7 @@ parameters:
   bin_count: 10
   ks_method: quantile
   ks_bucket: 10
-  binning_method: quantile
+  binning_method: chi  # chi=Toad 卡方合并；quantile=等频分箱
   max_categories: 20
   correlation_method: pearson
   metrics_backend: toad

@@ -1,14 +1,39 @@
-# Copy to configs/node_configs/data-read.yaml in the user workspace.
-# The CLI also creates this file automatically when it is missing.
+# 数据读取节点配置模板。
+# 首次运行时会复制到用户工作区：configs/node_configs/data-read.yaml。
+# 用户确认该文件后，系统会按确认内容重新读取数据；不要直接修改已确认文件
+# 后继续运行，否则需要重新确认哈希。
 node_id: data-read
 version: 1
 parameters:
-  # Optional role overrides. null means use data_contract.yaml.
+  # 字段角色覆盖。填写后优先使用这里的字段名；填写 null 时使用
+  # configs/data_contract.yaml 中的配置。
+  # id_col_nm：主键字段，支持单个字段名或字段名列表；用于检查重复主键。
   id_col_nm: null
+  # dt_col_nm：观察日期字段，用于日期解析和后续时间分析。
   dt_col_nm: null
+  # label_col_nm：目标/标签字段。好坏标签取值及含义仍在 data_contract.yaml 中配置。
   label_col_nm: null
+
+  # CSV 文件编码。常见取值为 utf-8、utf-8-sig 或 gbk；null 表示让读取器使用默认推断。
+  # Excel 文件不使用此参数。
   encoding: null
+
+  # Excel 工作表名称或序号，从 0 开始；CSV/Parquet 文件会忽略此参数。
   sheet_name: 0
+
+  # Polars 用于推断字段类型的采样行数。数据类型不稳定时可适当调大。
   infer_schema_length: 10000
+
+  # 读取阶段的契约容忍开关：只影响是否允许继续读取，不会自动去重或修正数据。
+  # 建模前的正式处理仍由样本诊断/特征处理节点完成。
+  # 是否允许重复主键；默认 false，发现重复时提示用户处理。
   allow_id_duplicates: false
+  # 是否允许缺失或非法标签先被读取；默认 true，便于诊断节点统计问题。
+  # 这不代表非法标签可以直接用于训练，训练前仍需按确认策略处理。
   allow_target_issues: true
+
+# 数据文件路径不在本模板中重复配置，解析顺序为：
+# 1) workflow 命令显式传入的 --data；
+# 2) configs/data_contract.yaml 的 input_path；
+# 3) 工作区根目录下唯一的 CSV/Parquet/Excel 文件。
+# 如果存在多个候选文件，必须先由用户选择。

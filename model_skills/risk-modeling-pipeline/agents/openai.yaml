@@ -1,4 +1,4 @@
 interface:
   display_name: "风控自动建模"
-  short_description: "用户确认后执行 AI 辅助风控 EDA、LightGBM 调参与审查"
-  default_prompt: "使用 $risk-modeling-pipeline 按读取数据、EDA分析、样本诊断、特征预处理筛选、模型配置、训练调参、模型审查、报告交付八个主节点处理我的结构化风控数据；每个确认门禁先反馈证据并等待我确认，再运行可复现的 EDA、Optuna-LightGBM 建模与红队审查。"
+  short_description: "用户确认后执行 AI 辅助风控 EDA、LightGBM 调参与审查（EDA 只生成报告，样本诊断输出风险提示表）"
+  default_prompt: "使用 $risk-modeling-pipeline 按读取数据、EDA分析、样本诊断、特征预处理筛选、模型配置与训练调参、模型审查处理我的结构化风控数据；data-read 首次执行必须展示 workflow 返回的 Markdown 结果表（文件名、行列数、ID/日期/Y 字段、标签映射和特征数量），只等待用户确认表格或提出字段/读取策略的文字修改；data-read.yaml 和哈希仅用于内部校验，不展示给用户；EDA 只生成完整 HTML/Excel/CSV 报告并自动进入下一个已选节点，不在聊天区输出长摘要；样本诊断使用默认参数，输出一张包含 IV、PSI、坏样本率及阈值解释的建模风险提示表并等待结果确认；特征处理和模型配置完成后输出中文总结并等待结果确认。"
